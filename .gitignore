@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# AlephNull data/model artifacts
+data/raw/*
+!data/raw/.gitkeep
+modules/tampering_detection/models/*
+!modules/tampering_detection/models/.gitkeep
