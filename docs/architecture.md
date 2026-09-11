@@ -28,8 +28,9 @@ AlephNull is a modular, offline-first identity verification pipeline. It exposes
 │    └─ face_strictness (0-100)    │    modules/face_verification/src/main.py
 │                                  │    DeepFace + FaceNet512 + RetinaFace
 │  POST /extract_text  ────────────┼──► Module 1: DocumentOCR
-│    └─ type, ocr_strictness       │    modules/ocr_extraction/src/main.py
-│                                  │    Tesseract → Ollama LLM correction
+│    └─ type/doc_type/q,           │    modules/ocr_extraction/src/main.py
+│       ocr_strictness             │    Passport / National ID / Driving License
+│                                  │    Sobel Text-Boxing → Tesseract → Ollama
 └──────────────────────────────────┘
 ```
 

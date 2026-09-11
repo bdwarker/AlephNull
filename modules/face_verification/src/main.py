@@ -49,11 +49,14 @@ class FaceVerification:
         else:
             raise TypeError(f"{label} must be a file path (str, Path) or a numpy.ndarray, got {type(img).__name__}")
 
-    def _extract_dominant_face(self, img: np.ndarray, label: str = "Image") -> tuple[np.ndarray, Any]:
+    def _extract_dominant_face(self, img: np.ndarray, label: str = "Image") -> tuple[np.ndarray, Any, list, dict, int]:
         """
         Extracts the largest / dominant face from an image,
         with multi-orientation fallback (0°, 90° CW, 180°, 90° CCW).
         Crops with 15% margin to prevent background noise, watermarks, or stamps from interfering.
+        
+        Returns:
+            (cropped_img, dominant_fa, all_detected_faces, image_dimensions, rotation_angle)
         """
         rotations = [
             (0, None),
@@ -64,6 +67,7 @@ class FaceVerification:
 
         best_faces = []
         best_img = img
+        best_angle = 0
 
         for angle, rot_code in rotations:
             cur_img = img if rot_code is None else cv2.rotate(img, rot_code)
@@ -88,20 +92,36 @@ class FaceVerification:
             if valid:
                 best_faces = valid
                 best_img = cur_img
+                best_angle = angle
                 break
+
+        h, w = best_img.shape[:2]
+        dims = {"width": int(w), "height": int(h)}
 
         if not best_faces:
             if self.enforce_detection:
                 raise ValueError(f"No face detected in {label}. Please ensure the face is visible, uncovered, and well-lit.")
-            return img, None
+            return img, None, [], dims, 0
 
         # Sort by bounding box area (w * h) descending -> dominant face is largest
         best_faces.sort(key=lambda f: f['facial_area']['w'] * f['facial_area']['h'], reverse=True)
         dominant = best_faces[0]
         fa = dominant['facial_area']
 
+        all_detected = [
+            {
+                "facial_area": {
+                    "x": int(f['facial_area']['x']),
+                    "y": int(f['facial_area']['y']),
+                    "w": int(f['facial_area']['w']),
+                    "h": int(f['facial_area']['h'])
+                },
+                "confidence": round(float(f.get('confidence', 1.0)), 4)
+            }
+            for f in best_faces
+        ]
+
         # Crop with 15% padding
-        h, w = best_img.shape[:2]
         pad_w = int(fa['w'] * 0.15)
         pad_h = int(fa['h'] * 0.15)
         x1 = max(0, fa['x'] - pad_w)
@@ -110,7 +130,7 @@ class FaceVerification:
         y2 = min(h, fa['y'] + fa['h'] + pad_h)
 
         cropped = best_img[y1:y2, x1:x2]
-        return (cropped if cropped.size > 0 else best_img), fa
+        return (cropped if cropped.size > 0 else best_img), fa, all_detected, dims, best_angle
 
     def verify_identity(
         self, 
@@ -127,15 +147,15 @@ class FaceVerification:
             strictness: Integer from 0 to 100. 50 is default threshold. 100 is very strict. 0 is loose.
             
         Returns:
-            dict: Verification results
+            dict: Verification results with face boxes and raw diagnostic data
         """
         try:
             img1 = self._prepare_image_input(person_image, "Person image")
             img2 = self._prepare_image_input(document_image, "Document image")
 
             # Extract dominant face crops to eliminate passport micro-watermarks or ghost artifacts
-            face_person, fa_person = self._extract_dominant_face(img1, "Person image")
-            face_doc, fa_doc = self._extract_dominant_face(img2, "Document image")
+            face_person, fa_person, faces_person, dims_person, rot_person = self._extract_dominant_face(img1, "Person image")
+            face_doc, fa_doc, faces_doc, dims_doc, rot_doc = self._extract_dominant_face(img2, "Document image")
 
             result = DeepFace.verify(
                 img1_path=face_person,
@@ -187,9 +207,41 @@ class FaceVerification:
                 'model': self.model_name,
                 'detector_backend': self.detector_backend,
                 'distance_metric': self.distance_metric,
+                'detected_faces': {
+                    'person': faces_person,
+                    'document': faces_doc
+                },
                 'facial_areas': {
-                    'person': fa_person,
-                    'document': fa_doc
+                    'person': {
+                        'x': int(fa_person['x']),
+                        'y': int(fa_person['y']),
+                        'w': int(fa_person['w']),
+                        'h': int(fa_person['h'])
+                    } if fa_person else None,
+                    'document': {
+                        'x': int(fa_doc['x']),
+                        'y': int(fa_doc['y']),
+                        'w': int(fa_doc['w']),
+                        'h': int(fa_doc['h'])
+                    } if fa_doc else None
+                },
+                'image_dimensions': {
+                    'person': dims_person,
+                    'document': dims_doc
+                },
+                'rotations': {
+                    'person': rot_person,
+                    'document': rot_doc
+                },
+                'raw_verification': {
+                    'distance': round(distance, 4),
+                    'threshold': round(threshold, 4),
+                    'base_threshold': round(base_threshold, 4),
+                    'strictness_modifier': round(modifier, 4),
+                    'verified': bool(is_match),
+                    'model': self.model_name,
+                    'detector': self.detector_backend,
+                    'metric': self.distance_metric
                 },
                 'error': None
             }
@@ -207,7 +259,10 @@ class FaceVerification:
                 'model': self.model_name,
                 'detector_backend': self.detector_backend,
                 'distance_metric': self.distance_metric,
+                'detected_faces': {'person': [], 'document': []},
                 'facial_areas': None,
+                'image_dimensions': None,
+                'raw_verification': None,
                 'error': f"Face detection failed: {real_error}"
             }
         except Exception as e:
@@ -221,7 +276,10 @@ class FaceVerification:
                 'model': self.model_name,
                 'detector_backend': self.detector_backend,
                 'distance_metric': self.distance_metric,
+                'detected_faces': {'person': [], 'document': []},
                 'facial_areas': None,
+                'image_dimensions': None,
+                'raw_verification': None,
                 'error': str(e)
             }
 

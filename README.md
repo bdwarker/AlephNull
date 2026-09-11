@@ -125,8 +125,9 @@ Then open `http://localhost:5000` (or `https://<your-ip>:5000` for mobile).
 - `detector_backend` — `opencv` (default), `ssd`, `mtcnn`
 
 **`POST /extract_text`**
-- `type` — `passport` (default) or `id_card`
-- `ocr_strictness` (0–100) — Tesseract bounding box confidence floor
+- `type` / `doc_type` / `q` — `passport` (default), `id_card` (National ID / Aadhaar), or `driving_license` (Driver's License)
+- `ocr_strictness` (0–100) — Sobel morphological dilation kernel strictness (100 = tight text box, 0 = generous document margins)
+- Returns: `extracted_fields`, `regions_identified` (bounding boxes, master crop, dimensions), `ocr_passes` (PSM 11 sparse, PSM 6 block, specialized), `raw_text`
 
 ---
 

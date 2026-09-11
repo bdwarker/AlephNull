@@ -1057,7 +1057,8 @@
                     </div>
                     <select id="pipe-doc-type">
                         <option value="passport">Passport (ICAO Doc 9303)</option>
-                        <option value="id_card">National ID / Driving License</option>
+                        <option value="id_card">National ID / State ID (e.g. Aadhaar)</option>
+                        <option value="driving_license">Driver's License (DL)</option>
                     </select>
                 </div>
             </div>
@@ -1160,8 +1161,9 @@
                         <span>Document Type</span>
                     </div>
                     <select id="admin-ocr-type">
-                        <option value="passport">Passport</option>
-                        <option value="id_card">National ID</option>
+                        <option value="passport">Passport (ICAO Doc 9303)</option>
+                        <option value="id_card">National ID / State ID (e.g. Aadhaar)</option>
+                        <option value="driving_license">Driver's License (DL)</option>
                     </select>
                 </div>
             </div>
@@ -1180,15 +1182,25 @@
                     <span class="status-badge" id="admin-ocr-badge">Success</span>
                 </div>
 
+                <!-- Visual Document Regions Container -->
+                <div id="admin-ocr-visual-container"></div>
+
                 <!-- Identity Fields Grid -->
+                <h3 style="font-size: 0.95rem; color: #60a5fa; margin-bottom: 0.75rem; font-weight: 700;">📋 Extracted Document Fields</h3>
                 <ul class="field-list" id="admin-ocr-fields"></ul>
 
-                <!-- Raw OCR Collapsible -->
+                <!-- Raw OCR Output & Extraction Passes -->
+                <div id="admin-ocr-raw-container" style="margin-top: 1.5rem;"></div>
+
+                <!-- Identified Regions Coordinates Collapsible -->
+                <div id="admin-ocr-regions-table" style="margin-top: 1rem;"></div>
+
+                <!-- Raw JSON Collapsible -->
                 <details style="margin-top: 1rem;">
                     <summary style="cursor:pointer; color:var(--text-muted); font-weight: 600; padding: 0.5rem 0;">
-                        🔍 View Raw Tesseract Output & Passes
+                        🔍 View Complete Raw OCR JSON Response
                     </summary>
-                    <pre id="admin-ocr-raw" style="margin-top: 0.5rem;"></pre>
+                    <pre id="admin-ocr-json" style="margin-top: 0.5rem;"></pre>
                 </details>
             </div>
         </section>
@@ -1341,6 +1353,9 @@
                     <h2>Face Verification Metrics</h2>
                     <span class="status-badge" id="admin-face-badge">Match</span>
                 </div>
+
+                <!-- Visual Face Bounding Boxes Container -->
+                <div id="admin-face-visual-container" style="margin-bottom: 1.5rem;"></div>
 
                 <div id="admin-face-details"></div>
             </div>
@@ -2107,16 +2122,17 @@
                 const v = faceData.verification;
                 const matchClass = v.is_match ? 'status-match' : 'status-nomatch';
                 faceContainer.innerHTML = `
-                    <div style="font-size: 1.5rem; font-weight: 800; color: ${v.is_match ? 'var(--success)' : 'var(--danger)'}; margin-bottom: 0.5rem;">
-                        ${v.is_match ? '✅ MATCH' : '❌ NO MATCH'}
+                    <div style="font-size: 1.4rem; font-weight: 800; color: ${v.is_match ? 'var(--success)' : 'var(--danger)'}; margin-bottom: 0.5rem;">
+                        ${v.is_match ? '✅ VERIFIED MATCH' : '❌ NO MATCH'}
                     </div>
                     <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Trust Score:</strong> ${v.trust_score ? v.trust_score.toFixed(1) : 0}/100</div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted);">Distance: ${v.distance} (Threshold: ${v.threshold})</div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Distance: ${v.distance} (Limit: ${v.threshold})</div>
+                    <div style="font-size: 0.8rem; color: #a78bfa;">Engine: ${v.model || 'Facenet512'} (${v.detector_backend || 'opencv'})</div>
                 `;
                 overallBadge.className = `status-badge ${matchClass}`;
                 overallBadge.textContent = v.is_match ? 'Verified' : 'Flagged';
             } else {
-                faceContainer.innerHTML = `<p style="color:var(--danger)">Error: ${faceData.error || 'Face verification failed'}</p>`;
+                faceContainer.innerHTML = `<p style="color:var(--danger)">Error: ${faceData.error || (faceData.verification && faceData.verification.error) || 'Face verification failed'}</p>`;
                 overallBadge.className = 'status-badge status-nomatch';
                 overallBadge.textContent = 'Error';
             }
@@ -2128,12 +2144,21 @@
                 `;
             } else if (ocrData.status === 'success') {
                 const f = ocrData.extracted_fields || {};
+                let fieldHtml = '';
+                for (const [k, v] of Object.entries(f)) {
+                    if (k === 'Document Type') continue;
+                    fieldHtml += `
+                        <div style="font-size: 0.92rem; margin-bottom: 0.35rem; display: flex; justify-content: space-between; border-bottom: 1px dashed rgba(255,255,255,0.08); padding-bottom: 0.25rem;">
+                            <span style="color: var(--text-muted); font-weight: 600;">${k}:</span>
+                            <span style="color: ${v ? '#60a5fa' : '#64748b'}; font-weight: 600;">${v || 'Not detected'}</span>
+                        </div>
+                    `;
+                }
                 ocrContainer.innerHTML = `
-                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Name:</strong> ${f["Name"] || 'Not detected'}</div>
-                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Passport No:</strong> ${f["Passport Number"] || 'Not detected'}</div>
-                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Nationality:</strong> ${f["Nationality"] || 'Not detected'}</div>
-                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>DOB:</strong> ${f["Date of Birth"] || 'Not detected'}</div>
-                    <div style="font-size: 0.95rem;"><strong>Expiry:</strong> ${f["Date of Expiry"] || 'Not detected'}</div>
+                    <div style="margin-bottom: 0.6rem;">
+                        <span class="tag-pill" style="font-size: 0.75rem;">${f["Document Type"] || (ocrData.document_type ? ocrData.document_type.replace('_', ' ').toUpperCase() : 'Document')}</span>
+                    </div>
+                    ${fieldHtml}
                 `;
             } else {
                 ocrContainer.innerHTML = `<p style="color:var(--danger)">Error: ${ocrData.error || 'OCR failed'}</p>`;
@@ -2185,43 +2210,165 @@
 
         function renderAdminOcr(data) {
             const badge = document.getElementById('admin-ocr-badge');
+            const visualContainer = document.getElementById('admin-ocr-visual-container');
             const fieldsList = document.getElementById('admin-ocr-fields');
-            const rawPre = document.getElementById('admin-ocr-raw');
+            const rawContainer = document.getElementById('admin-ocr-raw-container');
+            const regionsTable = document.getElementById('admin-ocr-regions-table');
+            const jsonPre = document.getElementById('admin-ocr-json');
 
+            visualContainer.innerHTML = '';
             fieldsList.innerHTML = '';
-            rawPre.textContent = data.raw_text || 'No raw text extracted';
+            rawContainer.innerHTML = '';
+            regionsTable.innerHTML = '';
+            jsonPre.textContent = JSON.stringify(data, null, 2);
 
             if (data.status === 'warning') {
                 badge.className = 'status-badge status-warning';
-                badge.textContent = 'Low Text';
+                badge.textContent = 'Low Text Detected';
                 fieldsList.innerHTML = `
                     <li class="field-item" style="grid-column: 1 / -1; border-color: #f59e0b; background: rgba(245, 158, 11, 0.1);">
                         <span class="field-label" style="color: #fbbf24;">Notice</span>
                         <span class="field-value" style="color: white; font-size: 0.95rem;">${data.message}</span>
                     </li>
                 `;
-                return;
-            }
-
-            if (data.status === 'error') {
+            } else if (data.status === 'error') {
                 badge.className = 'status-badge status-nomatch';
                 badge.textContent = 'Error';
                 fieldsList.innerHTML = `<li class="field-item" style="grid-column: 1 / -1; color: var(--danger);">${data.error}</li>`;
                 return;
+            } else {
+                badge.className = 'status-badge status-match';
+                badge.textContent = `${data.document_type ? data.document_type.replace('_', ' ').toUpperCase() : 'EXTRACTED'}`;
             }
 
-            badge.className = 'status-badge status-match';
-            badge.textContent = 'Extracted';
+            // 1. Visual Text Regions Overlay
+            const docPreview = document.getElementById('admin-ocr-preview');
+            const imgSrc = docPreview && docPreview.src ? docPreview.src : null;
+            const regions = data.regions_identified;
 
+            if (imgSrc && regions && regions.image_dimensions) {
+                const w = regions.image_dimensions.width || 800;
+                const h = regions.image_dimensions.height || 600;
+                const boxes = regions.text_boxes || [];
+                const master = regions.master_crop || { x: 0, y: 0, w: w, h: h };
+
+                let boxesSvg = '';
+                boxes.forEach((b) => {
+                    boxesSvg += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="rgba(56, 189, 248, 0.12)" stroke="#38bdf8" stroke-width="1.8" rx="2" />`;
+                });
+
+                let masterSvg = '';
+                if (master && master.w > 0 && master.h > 0) {
+                    masterSvg = `
+                        <rect x="${master.x}" y="${master.y}" width="${master.w}" height="${master.h}" fill="rgba(16, 185, 129, 0.08)" stroke="#10b981" stroke-width="2.5" stroke-dasharray="8 4" rx="4" />
+                        <rect x="${master.x - 2}" y="${master.y - 2}" width="10" height="10" fill="#10b981" />
+                        <rect x="${master.x + master.w - 8}" y="${master.y - 2}" width="10" height="10" fill="#10b981" />
+                        <rect x="${master.x - 2}" y="${master.y + master.h - 8}" width="10" height="10" fill="#10b981" />
+                        <rect x="${master.x + master.w - 8}" y="${master.y + master.h - 8}" width="10" height="10" fill="#10b981" />
+                    `;
+                }
+
+                visualContainer.innerHTML = `
+                    <div style="position: relative; max-width: 580px; margin: 0 auto 1.5rem auto; border-radius: 12px; overflow: hidden; border: 1px solid var(--border-color); background: #050811; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
+                        <img src="${imgSrc}" style="width: 100%; display: block; filter: brightness(0.95);" alt="Analyzed Document Preview">
+                        <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+                            ${masterSvg}
+                            ${boxesSvg}
+                        </svg>
+                        <div style="position: absolute; bottom: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; align-items: center; background: rgba(11, 15, 25, 0.88); padding: 6px 12px; border-radius: 8px; font-size: 0.78rem; border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(8px);">
+                            <span style="color: #38bdf8; font-weight: 700;">🔷 ${boxes.length} Text Blocks Detected</span>
+                            <span style="color: #10b981; font-weight: 700;">🟩 Master Area: ${master.w}×${master.h}</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // 2. Extracted Fields Grid
             const fields = data.extracted_fields || {};
             for (const [key, val] of Object.entries(fields)) {
                 const li = document.createElement('li');
                 li.className = 'field-item';
                 li.innerHTML = `
                     <span class="field-label">${key}</span>
-                    <span class="field-value">${val || '<span style="color:var(--text-muted); font-weight:normal;">null</span>'}</span>
+                    <span class="field-value">${val || '<span style="color:var(--text-muted); font-weight:normal;">Not detected</span>'}</span>
                 `;
                 fieldsList.appendChild(li);
+            }
+
+            // 3. Raw OCR Output & Multi-Pass breakdown
+            const passes = data.ocr_passes || {};
+            rawContainer.innerHTML = `
+                <div style="background: rgba(11, 15, 25, 0.6); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <h4 style="font-size: 0.95rem; color: #60a5fa; font-weight: 700;">📄 Raw OCR Output</h4>
+                        <span style="font-size: 0.75rem; color: var(--text-muted);">${(data.raw_text || '').length} characters</span>
+                    </div>
+                    <pre style="max-height: 200px; margin-bottom: 1rem;">${data.raw_text || 'No raw text extracted'}</pre>
+                    
+                    <details>
+                        <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.85rem; font-weight: 600;">
+                            📑 View Individual OCR Engine Passes (PSM 11 Sparse, PSM 6 Block, Specialized)
+                        </summary>
+                        <div style="margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                            <div>
+                                <div style="font-size: 0.75rem; color: #a78bfa; font-weight: 700; margin-bottom: 0.25rem;">Pass A — Sparse Layout (PSM 11):</div>
+                                <pre style="max-height: 120px; font-size: 0.8rem;">${passes.psm11_sparse || 'None'}</pre>
+                            </div>
+                            <div>
+                                <div style="font-size: 0.75rem; color: #38bdf8; font-weight: 700; margin-bottom: 0.25rem;">Pass B — Adaptive Block Layout (PSM 6):</div>
+                                <pre style="max-height: 120px; font-size: 0.8rem;">${passes.psm6_block || 'None'}</pre>
+                            </div>
+                            ${passes.specialized_pass ? `
+                            <div>
+                                <div style="font-size: 0.75rem; color: #10b981; font-weight: 700; margin-bottom: 0.25rem;">Pass C — Specialized Pass (MRZ / ID):</div>
+                                <pre style="max-height: 120px; font-size: 0.8rem;">${passes.specialized_pass}</pre>
+                            </div>
+                            ` : ''}
+                        </div>
+                    </details>
+                </div>
+            `;
+
+            // 4. Identified Text Regions Table
+            if (regions && regions.text_boxes && regions.text_boxes.length > 0) {
+                let rows = '';
+                regions.text_boxes.forEach((b, i) => {
+                    rows += `
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                            <td style="padding: 6px 10px; color: #38bdf8;">#${i+1}</td>
+                            <td style="padding: 6px 10px;">${b.x}</td>
+                            <td style="padding: 6px 10px;">${b.y}</td>
+                            <td style="padding: 6px 10px;">${b.w}</td>
+                            <td style="padding: 6px 10px;">${b.h}</td>
+                            <td style="padding: 6px 10px; color: var(--text-muted);">${b.w * b.h} px²</td>
+                        </tr>
+                    `;
+                });
+
+                regionsTable.innerHTML = `
+                    <details>
+                        <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.85rem; font-weight: 600;">
+                            📐 Identified Regions Coordinates Table (${regions.text_boxes.length} text blocks)
+                        </summary>
+                        <div style="margin-top: 0.5rem; max-height: 220px; overflow-y: auto; background: #080c14; border: 1px solid var(--border-color); border-radius: 8px;">
+                            <table style="width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; text-align: left;">
+                                <thead>
+                                    <tr style="background: rgba(255,255,255,0.05); color: var(--text-muted); border-bottom: 1px solid var(--border-color);">
+                                        <th style="padding: 6px 10px;">Box</th>
+                                        <th style="padding: 6px 10px;">X</th>
+                                        <th style="padding: 6px 10px;">Y</th>
+                                        <th style="padding: 6px 10px;">Width</th>
+                                        <th style="padding: 6px 10px;">Height</th>
+                                        <th style="padding: 6px 10px;">Area</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${rows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </details>
+                `;
             }
         }
 
@@ -2275,19 +2422,91 @@
 
         function renderAdminFace(data) {
             const badge = document.getElementById('admin-face-badge');
+            const visualContainer = document.getElementById('admin-face-visual-container');
             const container = document.getElementById('admin-face-details');
+
+            visualContainer.innerHTML = '';
+            container.innerHTML = '';
 
             if (data.status === 'error' || (data.verification && data.verification.error)) {
                 badge.className = 'status-badge status-nomatch';
                 badge.textContent = 'Error';
-                container.innerHTML = `<p style="color:var(--danger)">Error: ${data.error || data.verification.error}</p>`;
+                container.innerHTML = `<p style="color:var(--danger)">Error: ${data.error || (data.verification && data.verification.error) || 'Verification failed'}</p>`;
                 return;
             }
 
             const v = data.verification;
             badge.className = `status-badge ${v.is_match ? 'status-match' : 'status-nomatch'}`;
-            badge.textContent = v.is_match ? 'MATCH' : 'NO MATCH';
+            badge.textContent = v.is_match ? 'VERIFIED MATCH' : 'NO MATCH';
 
+            // 1. Visual Face Bounding Boxes
+            const pPreview = document.getElementById('admin-face1-preview');
+            const dPreview = document.getElementById('admin-face2-preview');
+            const pSrc = pPreview && pPreview.src ? pPreview.src : null;
+            const dSrc = dPreview && dPreview.src ? dPreview.src : null;
+
+            const pFaces = (v.detected_faces && v.detected_faces.person) || [];
+            const dFaces = (v.detected_faces && v.detected_faces.document) || [];
+            const pDims = (v.image_dimensions && v.image_dimensions.person) || { width: 400, height: 300 };
+            const dDims = (v.image_dimensions && v.image_dimensions.document) || { width: 400, height: 300 };
+
+            let pSvg = '';
+            pFaces.forEach((f, i) => {
+                const fa = f.facial_area || f;
+                pSvg += `
+                    <rect x="${fa.x}" y="${fa.y}" width="${fa.w}" height="${fa.h}" fill="rgba(16, 185, 129, 0.15)" stroke="#10b981" stroke-width="2.5" rx="4" />
+                    <text x="${fa.x + 4}" y="${Math.max(16, fa.y - 6)}" fill="#10b981" font-size="14" font-weight="bold" font-family="sans-serif">Face #${i+1} (${Math.round((f.confidence||1)*100)}%)</text>
+                `;
+            });
+
+            let dSvg = '';
+            dFaces.forEach((f, i) => {
+                const fa = f.facial_area || f;
+                dSvg += `
+                    <rect x="${fa.x}" y="${fa.y}" width="${fa.w}" height="${fa.h}" fill="rgba(56, 189, 248, 0.15)" stroke="#38bdf8" stroke-width="2.5" rx="4" />
+                    <text x="${fa.x + 4}" y="${Math.max(16, fa.y - 6)}" fill="#38bdf8" font-size="14" font-weight="bold" font-family="sans-serif">Doc Face #${i+1} (${Math.round((f.confidence||1)*100)}%)</text>
+                `;
+            });
+
+            visualContainer.innerHTML = `
+                <div class="card-grid" style="margin-bottom: 1.5rem;">
+                    <!-- Face 1 (Person) -->
+                    <div style="background: rgba(11, 15, 25, 0.6); padding: 1rem; border-radius: 12px; border: 1px solid var(--border-color);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <h4 style="font-size: 0.85rem; color: #a78bfa; font-weight: 700;">👤 Face 1 Probe (${pFaces.length} detected)</h4>
+                            <span style="font-size: 0.7rem; color: #10b981; font-weight: 700;">${pDims.width}×${pDims.height}</span>
+                        </div>
+                        <div style="position: relative; border-radius: 8px; overflow: hidden; background: #050811;">
+                            ${pSrc ? `<img src="${pSrc}" style="width: 100%; display: block;" alt="Face 1 Probe">` : '<div style="height: 180px; display:flex; align-items:center; justify-content:center; color:var(--text-muted);">No image</div>'}
+                            <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;" viewBox="0 0 ${pDims.width} ${pDims.height}" preserveAspectRatio="none">
+                                ${pSvg}
+                            </svg>
+                        </div>
+                        <div style="margin-top: 0.5rem; font-size: 0.78rem; color: var(--text-muted);">
+                            ${v.facial_areas && v.facial_areas.person ? `Dominant box: [x: ${v.facial_areas.person.x}, y: ${v.facial_areas.person.y}, w: ${v.facial_areas.person.w}, h: ${v.facial_areas.person.h}]` : 'No face coordinates'}
+                        </div>
+                    </div>
+
+                    <!-- Face 2 (Document) -->
+                    <div style="background: rgba(11, 15, 25, 0.6); padding: 1rem; border-radius: 12px; border: 1px solid var(--border-color);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <h4 style="font-size: 0.85rem; color: #38bdf8; font-weight: 700;">📄 Face 2 Doc Photo (${dFaces.length} detected)</h4>
+                            <span style="font-size: 0.7rem; color: #38bdf8; font-weight: 700;">${dDims.width}×${dDims.height}</span>
+                        </div>
+                        <div style="position: relative; border-radius: 8px; overflow: hidden; background: #050811;">
+                            ${dSrc ? `<img src="${dSrc}" style="width: 100%; display: block;" alt="Face 2 Document">` : '<div style="height: 180px; display:flex; align-items:center; justify-content:center; color:var(--text-muted);">No image</div>'}
+                            <svg style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;" viewBox="0 0 ${dDims.width} ${dDims.height}" preserveAspectRatio="none">
+                                ${dSvg}
+                            </svg>
+                        </div>
+                        <div style="margin-top: 0.5rem; font-size: 0.78rem; color: var(--text-muted);">
+                            ${v.facial_areas && v.facial_areas.document ? `Dominant box: [x: ${v.facial_areas.document.x}, y: ${v.facial_areas.document.y}, w: ${v.facial_areas.document.w}, h: ${v.facial_areas.document.h}]` : 'No face coordinates'}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // 2. Metrics & Details
             container.innerHTML = `
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
                     <div class="field-item">
@@ -2310,8 +2529,23 @@
                     </div>
                 </div>
 
+                <!-- Detected Faces Raw Coordinates List -->
+                <div style="background: rgba(11, 15, 25, 0.6); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem;">
+                    <h4 style="font-size: 0.95rem; color: #a78bfa; margin-bottom: 0.75rem; font-weight: 700;">📐 Detected Face Bounding Boxes & Confidences</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;">
+                        <div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.35rem; font-weight: 600;">Person Probe Faces:</div>
+                            <pre style="max-height: 140px; font-size: 0.8rem;">${JSON.stringify(pFaces, null, 2)}</pre>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.35rem; font-weight: 600;">Document Photo Faces:</div>
+                            <pre style="max-height: 140px; font-size: 0.8rem;">${JSON.stringify(dFaces, null, 2)}</pre>
+                        </div>
+                    </div>
+                </div>
+
                 <details>
-                    <summary style="cursor:pointer; color:var(--text-muted); font-weight:600;">View Raw Verification JSON</summary>
+                    <summary style="cursor:pointer; color:var(--text-muted); font-weight:600;">View Complete Raw Verification JSON</summary>
                     <pre style="margin-top:0.5rem;">${JSON.stringify(v, null, 2)}</pre>
                 </details>
             `;

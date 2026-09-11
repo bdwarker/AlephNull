@@ -3,6 +3,13 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+# Fix Windows console encoding issues with UTF-8 / emojis
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -319,15 +326,24 @@ def extract_text():
     if not os.path.exists(doc_img_path):
         return jsonify({"error": f"Document image file does not exist: {doc_img_path}"}), 404
 
-    doc_type = request.args.get("type") or (request.json.get("type") if request.is_json else None) or "passport"
+    doc_type = (
+        request.args.get("doc_type")
+        or request.args.get("type")
+        or request.args.get("document_type")
+        or request.args.get("q")
+        or request.form.get("doc_type")
+        or request.form.get("type")
+        or request.form.get("q")
+        or (request.json.get("doc_type") or request.json.get("type") or request.json.get("q") if request.is_json else None)
+        or "passport"
+    )
     
     ocr_strictness = request.args.get("ocr_strictness") or (request.json.get("ocr_strictness") if request.is_json else None)
     ocr_strictness = int(ocr_strictness) if ocr_strictness is not None else 50
 
     try:
         ocr = DocumentOCR()
-        # Note: doc_type was removed in the new implementation, just passing strictness
-        result = ocr.process_document(doc_img_path, strictness=ocr_strictness)
+        result = ocr.process_document(doc_img_path, doc_type=doc_type, strictness=ocr_strictness)
 
         if result.get("status") == "error":
             return jsonify(result), 500
@@ -429,7 +445,7 @@ if __name__ == "__main__":
         print(f"\n🔐 Starting AlephNull Verification API with SSL (HTTPS) on port {port}...")
         print(f"👉 Mobile In-Browser Camera URL: https://<your-machine-ip>:{port}")
         print("   (Accept the self-signed certificate warning on your phone to unlock live camera viewfinders)\n")
-        app.run(host="0.0.0.0", port=port, debug=True, ssl_context=(cert_path, key_path))
+        app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False, ssl_context=(cert_path, key_path))
     else:
         print(f"\n🌐 Starting AlephNull Verification API on http://0.0.0.0:{port}...")
         print("💡 Note for Mobile: Android/iOS browsers disable live camera streaming on plain HTTP.")
