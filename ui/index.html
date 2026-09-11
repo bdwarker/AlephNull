@@ -1,0 +1,2324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AlephNull Identity Verification & Diagnostics</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        :root {
+            --bg-color: #0b0f19;
+            --surface-color: #151e2e;
+            --surface-hover: #1c273c;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --primary-color: #3b82f6;
+            --primary-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            --accent-purple: #8b5cf6;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: #27354a;
+            --border-hover: #3d5272;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --radius-lg: 16px;
+            --radius-md: 10px;
+            --radius-sm: 6px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+        }
+
+        header {
+            width: 100%;
+            padding: 1.75rem 1rem;
+            text-align: center;
+            background: linear-gradient(180deg, rgba(21, 30, 46, 0.95) 0%, rgba(11, 15, 25, 0.8) 100%);
+            border-bottom: 1px solid var(--border-color);
+            backdrop-filter: blur(12px);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+
+        .brand-title {
+            font-size: clamp(1.6rem, 4vw, 2.4rem);
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.25rem;
+        }
+
+        .brand-subtitle {
+            color: var(--text-muted);
+            font-size: clamp(0.8rem, 2vw, 0.95rem);
+            font-weight: 500;
+        }
+
+        /* Nav Tabs */
+        .nav-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin: 1.5rem 1rem 2rem 1rem;
+            background: rgba(21, 30, 46, 0.9);
+            padding: 0.4rem;
+            border-radius: 9999px;
+            border: 1px solid var(--border-color);
+            max-width: 650px;
+            width: 92%;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 0.65rem 1rem;
+            border-radius: 9999px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: clamp(0.75rem, 2vw, 0.9rem);
+            cursor: pointer;
+            transition: all 0.25s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-main);
+        }
+
+        .tab-btn.active {
+            background: var(--primary-gradient);
+            color: white;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+        }
+
+        /* Main Workspace Container */
+        .main-wrapper {
+            width: 92%;
+            max-width: 1080px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 4rem;
+        }
+
+        .tab-panel {
+            width: 100%;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .tab-panel.active {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Cards and Grids */
+        .card-grid {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--surface-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+        }
+
+        .card-header {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .tag-pill {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        /* Media Frame / Video / Preview */
+        .media-frame {
+            width: 100%;
+            aspect-ratio: 4/3;
+            background-color: #080c14;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            position: relative;
+            margin-bottom: 1.25rem;
+            border: 1px dashed var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .preview-img {
+            display: none;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background-color: #080c14;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 10;
+        }
+
+        .camera-fallback {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            text-align: center;
+            color: var(--text-muted);
+            gap: 0.5rem;
+        }
+
+        /* ============================================== */
+        /* ============================================== */
+        /* SLEEK BIOMETRIC & DOCUMENT CAMERA VIEWFINDFERS */
+        /* ============================================== */
+        .camera-guide {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.25s ease;
+        }
+
+        .media-frame.has-preview .camera-guide {
+            display: none !important;
+        }
+
+        .guide-svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        /* Biometric Face Contour */
+        .face-biometric-contour {
+            fill: none;
+            stroke: url(#face-neon-grad);
+            stroke-width: 2.5;
+            filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.7));
+            animation: biometricGlow 3s infinite ease-in-out;
+        }
+
+        @keyframes biometricGlow {
+            0%, 100% {
+                filter: drop-shadow(0 0 6px rgba(168, 85, 247, 0.55));
+                opacity: 0.88;
+            }
+            50% {
+                filter: drop-shadow(0 0 18px rgba(192, 132, 252, 0.95));
+                opacity: 1;
+            }
+        }
+
+        .face-biometric-tick {
+            stroke: #38bdf8;
+            stroke-width: 2.5;
+            stroke-linecap: round;
+        }
+
+        /* Document Scan Frame */
+        .doc-svg-box {
+            fill: none;
+            stroke: rgba(56, 189, 248, 0.85);
+            stroke-width: 2;
+            stroke-dasharray: 6 6;
+            filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.35));
+            transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .doc-svg-box.id_card {
+            stroke: rgba(52, 211, 153, 0.9);
+            filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.4));
+        }
+
+        .doc-svg-bracket {
+            fill: none;
+            stroke: #38bdf8;
+            stroke-width: 3.5;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            transition: stroke 0.3s;
+        }
+
+        .doc-svg-bracket.id_card {
+            stroke: #34d399;
+        }
+
+        /* Guide Tag Pill */
+        .guide-tag {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(11, 15, 25, 0.88);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            color: #f1f5f9;
+            font-size: 0.78rem;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 9999px;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+            z-index: 10;
+        }
+
+        .pulse-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #a855f7;
+            box-shadow: 0 0 8px #a855f7;
+            animation: dotPulse 1.6s infinite;
+        }
+
+        .pulse-dot.blue {
+            background: #38bdf8;
+            box-shadow: 0 0 8px #38bdf8;
+        }
+
+        @keyframes dotPulse {
+            0%, 100% { opacity: 0.4; transform: scale(0.85); }
+            50% { opacity: 1; transform: scale(1.25); }
+        }
+
+        /* ============================================== */
+        /* INTERACTIVE CROPPER MODAL                      */
+        /* ============================================== */
+        .cropper-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            box-sizing: border-box;
+        }
+
+        .cropper-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(4, 7, 14, 0.9);
+            backdrop-filter: blur(10px);
+        }
+
+        .cropper-dialog {
+            position: relative;
+            z-index: 10000;
+            background: #0b0f19;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 16px;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.75), 0 0 30px rgba(59, 130, 246, 0.18);
+            width: 100%;
+            max-width: 820px;
+            height: 90vh;
+            max-height: 720px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            animation: cropperModalIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes cropperModalIn {
+            from { opacity: 0; transform: scale(0.96) translateY(10px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+
+        .cropper-header {
+            padding: 0.9rem 1.25rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(15, 23, 42, 0.65);
+        }
+
+        .cropper-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #f1f5f9;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .cropper-close-btn {
+            background: none;
+            border: none;
+            color: #94a3b8;
+            font-size: 1.75rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .cropper-close-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .cropper-body {
+            flex: 1;
+            position: relative;
+            background: #030712;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            touch-action: none;
+        }
+
+        .cropper-stage {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        #cropper-canvas {
+            position: absolute;
+            display: block;
+        }
+
+        .cropper-marquee {
+            position: absolute;
+            box-sizing: border-box;
+            border: 2px solid #38bdf8;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.72);
+            cursor: move;
+            touch-action: none;
+        }
+
+        .cropper-marquee.face-mode {
+            border-color: #c084fc;
+        }
+
+        .crop-face-oval {
+            position: absolute;
+            inset: 4px;
+            border-radius: 50% / 60%;
+            border: 1px dashed rgba(192, 132, 252, 0.6);
+            pointer-events: none;
+        }
+
+        .crop-grid-h1, .crop-grid-h2 {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.22);
+            pointer-events: none;
+        }
+        .crop-grid-h1 { top: 33.33%; }
+        .crop-grid-h2 { top: 66.66%; }
+
+        .crop-grid-v1, .crop-grid-v2 {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: rgba(255, 255, 255, 0.22);
+            pointer-events: none;
+        }
+        .crop-grid-v1 { left: 33.33%; }
+        .crop-grid-v2 { left: 66.66%; }
+
+        .crop-handle {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background: #38bdf8;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+            touch-action: none;
+            z-index: 10;
+        }
+
+        .cropper-marquee.face-mode .crop-handle {
+            background: #c084fc;
+        }
+
+        .handle-nw { top: -8px; left: -8px; cursor: nwse-resize; }
+        .handle-ne { top: -8px; right: -8px; cursor: nesw-resize; }
+        .handle-sw { bottom: -8px; left: -8px; cursor: nesw-resize; }
+        .handle-se { bottom: -8px; right: -8px; cursor: nwse-resize; }
+        .handle-n { top: -8px; left: calc(50% - 8px); cursor: ns-resize; }
+        .handle-s { bottom: -8px; left: calc(50% - 8px); cursor: ns-resize; }
+        .handle-w { top: calc(50% - 8px); left: -8px; cursor: ew-resize; }
+        .handle-e { top: calc(50% - 8px); right: -8px; cursor: ew-resize; }
+
+        .cropper-footer {
+            padding: 0.85rem 1.25rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(15, 23, 42, 0.65);
+        }
+
+        .cropper-toolbar-left, .cropper-toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .cropper-presets {
+            display: flex;
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 2px;
+        }
+
+        .preset-btn {
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            padding: 0.4rem 0.75rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .preset-btn:hover {
+            color: #fff;
+        }
+
+        .preset-btn.active {
+            background: #2563eb;
+            color: #fff;
+            box-shadow: 0 2px 6px rgba(37, 99, 235, 0.4);
+        }
+
+        .btn-sm {
+            padding: 0.45rem 0.9rem;
+            font-size: 0.85rem;
+            border-radius: 8px;
+            width: auto;
+        }
+
+        @media (max-width: 640px) {
+            .cropper-modal {
+                padding: 0.35rem;
+            }
+            .cropper-dialog {
+                height: 96vh;
+                max-height: none;
+                border-radius: 12px;
+            }
+            .cropper-footer {
+                padding: 0.6rem 0.75rem;
+                gap: 0.5rem;
+            }
+            .cropper-toolbar-left, .cropper-toolbar-right {
+                width: 100%;
+                justify-content: space-between;
+            }
+            .cropper-presets {
+                flex: 1;
+                justify-content: space-around;
+            }
+            .preset-btn {
+                padding: 0.35rem 0.5rem;
+                font-size: 0.75rem;
+            }
+            .card-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Button controls */
+        .btn-group {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 0.75rem 1.25rem;
+            border-radius: var(--radius-md);
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            text-align: center;
+        }
+
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-primary:hover {
+            filter: brightness(1.1);
+            transform: translateY(-1px);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--border-hover);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+
+        .btn-lg {
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+            font-weight: 700;
+            border-radius: 12px;
+        }
+
+        /* Settings Bar */
+        .settings-card {
+            width: 100%;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .slider-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .slider-val {
+            color: #60a5fa;
+            font-weight: 700;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            background: #27354a;
+            border-radius: 3px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #60a5fa;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(96, 165, 250, 0.5);
+            transition: transform 0.1s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .slider-caption {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+
+        select, input[type="text"] {
+            width: 100%;
+            padding: 0.65rem 0.85rem;
+            border-radius: var(--radius-sm);
+            background-color: var(--bg-color);
+            color: white;
+            border: 1px solid var(--border-color);
+            font-family: inherit;
+            font-size: 0.9rem;
+            outline: none;
+        }
+
+        select:focus, input[type="text"]:focus {
+            border-color: var(--primary-color);
+        }
+
+        /* Action bar */
+        .cta-container {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2.5rem;
+        }
+
+        /* Results Panel */
+        .results-box {
+            width: 100%;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+            margin-bottom: 3rem;
+            display: none;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.3);
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .status-badge {
+            padding: 0.35rem 0.85rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .status-match {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.4);
+        }
+
+        .status-nomatch {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+        }
+
+        .status-warning {
+            background: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.4);
+        }
+
+        /* Structured Fields List */
+        .field-list {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .field-item {
+            background: rgba(11, 15, 25, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 0.75rem 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+        }
+
+        .field-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .field-value {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: #60a5fa;
+            word-break: break-word;
+        }
+
+        pre {
+            background: #080c14;
+            padding: 1rem;
+            border-radius: var(--radius-sm);
+            border: 1px solid #1a2538;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: #94a3b8;
+            overflow-x: auto;
+            max-height: 250px;
+            white-space: pre-wrap;
+        }
+
+        /* Spinner */
+        .spinner {
+            display: none;
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-left-color: #60a5fa;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Responsive Mobile Styles */
+        @media (max-width: 640px) {
+            .nav-tabs {
+                width: 96%;
+                border-radius: 12px;
+            }
+            .tab-btn {
+                padding: 0.5rem 0.6rem;
+                font-size: 0.75rem;
+            }
+            .main-wrapper {
+                width: 96%;
+            }
+            .settings-card {
+                grid-template-columns: 1fr;
+            }
+            .field-list {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="brand-title">AlephNull Verification</div>
+        <div class="brand-subtitle">Local AI Screening Pipeline & Diagnostics Suite</div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs" role="tablist">
+        <button class="tab-btn active" id="tab-pipeline-btn" onclick="switchTab('pipeline')">
+            <span>🚀 Full Pipeline</span>
+        </button>
+        <button class="tab-btn" id="tab-ocr-btn" onclick="switchTab('ocr')">
+            <span>📄 OCR Admin</span>
+        </button>
+        <button class="tab-btn" id="tab-face-btn" onclick="switchTab('face')">
+            <span>👤 Face Admin</span>
+        </button>
+    </nav>
+
+    <div class="main-wrapper">
+
+        <!-- ========================================== -->
+        <!-- TAB 1: FULL VERIFICATION PIPELINE           -->
+        <!-- ========================================== -->
+        <section class="tab-panel active" id="panel-pipeline">
+            <div class="card-grid">
+                <!-- Person / Selfie Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">👤 Live Person Selfie</div>
+                        <span class="tag-pill">Face Probe</span>
+                    </div>
+                    <div class="media-frame" id="pipe-person-frame">
+                        <video id="pipe-person-video" autoplay playsinline muted></video>
+                        <img id="pipe-person-preview" class="preview-img" alt="Person photo preview">
+                        <div class="camera-guide face-guide" id="pipe-person-guide">
+                            <svg class="guide-svg" viewBox="0 0 400 300">
+                                <defs>
+                                    <mask id="pipe-person-mask">
+                                        <rect width="400" height="300" fill="white" />
+                                        <path d="M 200, 26 C 258, 26 280, 72 280, 134 C 280, 196 238, 248 200, 248 C 162, 248 120, 196 120, 134 C 120, 72 142, 26 200, 26 Z" fill="black" />
+                                    </mask>
+                                    <linearGradient id="face-neon-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                        <stop offset="0%" stop-color="#38bdf8" />
+                                        <stop offset="50%" stop-color="#c084fc" />
+                                        <stop offset="100%" stop-color="#ec4899" />
+                                    </linearGradient>
+                                </defs>
+                                <rect width="400" height="300" fill="rgba(4, 7, 14, 0.6)" mask="url(#pipe-person-mask)" />
+                                <path class="face-biometric-contour" d="M 200, 26 C 258, 26 280, 72 280, 134 C 280, 196 238, 248 200, 248 C 162, 248 120, 196 120, 134 C 120, 72 142, 26 200, 26 Z" />
+                                <line class="face-biometric-tick" x1="200" y1="14" x2="200" y2="22" />
+                                <line class="face-biometric-tick" x1="200" y1="252" x2="200" y2="260" />
+                                <line class="face-biometric-tick" x1="108" y1="134" x2="116" y2="134" />
+                                <line class="face-biometric-tick" x1="284" y1="134" x2="292" y2="134" />
+                                <line x1="150" y1="112" x2="250" y2="112" stroke="rgba(255,255,255,0.25)" stroke-dasharray="3 3" stroke-width="1" />
+                            </svg>
+                            <div class="guide-tag">
+                                <span class="pulse-dot"></span>
+                                <span>Position Face in Biometric Zone</span>
+                            </div>
+                        </div>
+                        <div class="camera-fallback" id="pipe-person-fallback">
+                            <span>📷 Camera blocked or unavailable</span>
+                            <small>Use the upload button below to take/select a photo</small>
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" id="pipe-person-snap">Snap Photo</button>
+                        <div class="btn-subgroup" id="pipe-person-subgroup" style="display:none; width: 100%; gap: 0.5rem;">
+                            <button class="btn btn-outline" id="pipe-person-crop" style="flex:1;">✂️ Crop / Adjust</button>
+                            <button class="btn btn-outline" id="pipe-person-retake" style="flex:1;">🔄 Retake</button>
+                        </div>
+                        <label class="btn btn-outline" style="margin-bottom:0; cursor:pointer;">
+                            📁 Take Photo / Upload
+                            <input type="file" id="pipe-person-file" accept="image/*" capture="user" style="display:none;">
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Document Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">📄 Identity Document</div>
+                        <span class="tag-pill">OCR & Reference</span>
+                    </div>
+                    <div class="media-frame" id="pipe-doc-frame">
+                        <video id="pipe-doc-video" autoplay playsinline muted></video>
+                        <img id="pipe-doc-preview" class="preview-img" alt="Document photo preview">
+                        <div class="camera-guide doc-guide" id="pipe-doc-guide">
+                            <svg class="guide-svg" viewBox="0 0 400 300">
+                                <defs>
+                                    <mask id="pipe-doc-mask">
+                                        <rect width="400" height="300" fill="white" />
+                                        <rect id="pipe-doc-cutout" x="35" y="38" width="330" height="224" rx="10" fill="black" />
+                                    </mask>
+                                </defs>
+                                <rect width="400" height="300" fill="rgba(4, 7, 14, 0.6)" mask="url(#pipe-doc-mask)" />
+                                <rect id="pipe-doc-box" class="doc-svg-box" x="35" y="38" width="330" height="224" rx="10" />
+                                <path id="pipe-doc-brackets" class="doc-svg-bracket" d="M 55,38 L 35,38 L 35,58 M 345,38 L 365,38 L 365,58 M 35,242 L 35,262 L 55,262 M 365,242 L 365,262 L 345,262" />
+                            </svg>
+                            <div class="guide-tag">
+                                <span class="pulse-dot blue"></span>
+                                <span id="pipe-doc-caption">Align Passport Inside Frame</span>
+                            </div>
+                        </div>
+                        <div class="camera-fallback" id="pipe-doc-fallback">
+                            <span>📷 Camera blocked or unavailable</span>
+                            <small>Use the upload button below to take/select a photo</small>
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" id="pipe-doc-snap">Snap Document</button>
+                        <div class="btn-subgroup" id="pipe-doc-subgroup" style="display:none; width: 100%; gap: 0.5rem;">
+                            <button class="btn btn-outline" id="pipe-doc-crop" style="flex:1;">✂️ Crop / Adjust</button>
+                            <button class="btn btn-outline" id="pipe-doc-retake" style="flex:1;">🔄 Retake</button>
+                        </div>
+                        <label class="btn btn-outline" style="margin-bottom:0; cursor:pointer;">
+                            📁 Take Photo / Upload
+                            <input type="file" id="pipe-doc-file" accept="image/*" capture="environment" style="display:none;">
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pipeline Sliders -->
+            <div class="settings-card">
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Face Strictness</span>
+                        <span class="slider-val" id="pipe-face-val">50</span>
+                    </div>
+                    <input type="range" id="pipe-face-slider" min="0" max="100" value="50">
+                    <div class="slider-caption">
+                        <span>Loose Match</span><span>Strict Match</span>
+                    </div>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>OCR Bounding Strictness</span>
+                        <span class="slider-val" id="pipe-ocr-val">50</span>
+                    </div>
+                    <input type="range" id="pipe-ocr-slider" min="0" max="100" value="50">
+                    <div class="slider-caption">
+                        <span>Bigger Boxes</span><span>Tight Text Box</span>
+                    </div>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Document Type</span>
+                    </div>
+                    <select id="pipe-doc-type">
+                        <option value="passport">Passport (ICAO Doc 9303)</option>
+                        <option value="id_card">National ID / Driving License</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Run Verification CTA -->
+            <div class="cta-container">
+                <button class="btn btn-primary btn-lg" id="run-pipeline-btn" style="max-width: 420px;">
+                    ⚡ Verify Identity & Extract OCR
+                </button>
+                <div class="spinner" id="pipeline-spinner"></div>
+            </div>
+
+            <!-- Pipeline Results View -->
+            <div class="results-box" id="pipeline-results">
+                <div class="results-header">
+                    <h2>Pipeline Results</h2>
+                    <span class="status-badge" id="pipeline-overall-badge">Pending</span>
+                </div>
+
+                <div class="card-grid" style="margin-bottom: 1.5rem;">
+                    <!-- Face match summary -->
+                    <div style="background: rgba(11,15,25,0.6); padding: 1.25rem; border-radius: 12px; border: 1px solid var(--border-color);">
+                        <h3 style="margin-bottom: 0.75rem; color: #a78bfa;">👤 Face Match (Module 4)</h3>
+                        <div id="pipe-face-res"></div>
+                    </div>
+
+                    <!-- OCR summary -->
+                    <div style="background: rgba(11,15,25,0.6); padding: 1.25rem; border-radius: 12px; border: 1px solid var(--border-color);">
+                        <h3 style="margin-bottom: 0.75rem; color: #60a5fa;">📄 OCR Data (Module 1)</h3>
+                        <div id="pipe-ocr-res"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+
+        <!-- ========================================== -->
+        <!-- TAB 2: OCR ADMIN DIAGNOSTICS               -->
+        <!-- ========================================== -->
+        <section class="tab-panel" id="panel-ocr">
+            <div class="card" style="width: 100%; max-width: 600px; margin-bottom: 1.5rem;">
+                <div class="card-header">
+                    <div class="card-title">📄 Document Input for OCR Testing</div>
+                    <span class="tag-pill">Module 1 Standalone</span>
+                </div>
+                <div class="media-frame" id="admin-ocr-frame">
+                    <video id="admin-ocr-video" autoplay playsinline muted></video>
+                    <img id="admin-ocr-preview" class="preview-img" alt="OCR test preview">
+                    <div class="camera-guide doc-guide" id="admin-ocr-guide">
+                        <svg class="guide-svg" viewBox="0 0 400 300">
+                            <defs>
+                                <mask id="admin-ocr-mask">
+                                    <rect width="400" height="300" fill="white" />
+                                    <rect id="admin-ocr-cutout" x="35" y="38" width="330" height="224" rx="10" fill="black" />
+                                </mask>
+                            </defs>
+                            <rect width="400" height="300" fill="rgba(4, 7, 14, 0.6)" mask="url(#admin-ocr-mask)" />
+                            <rect id="admin-ocr-box" class="doc-svg-box" x="35" y="38" width="330" height="224" rx="10" />
+                            <path id="admin-ocr-brackets" class="doc-svg-bracket" d="M 55,38 L 35,38 L 35,58 M 345,38 L 365,38 L 365,58 M 35,242 L 35,262 L 55,262 M 365,242 L 365,262 L 345,262" />
+                        </svg>
+                        <div class="guide-tag">
+                            <span class="pulse-dot blue"></span>
+                            <span id="admin-ocr-caption">Align Passport Inside Frame</span>
+                        </div>
+                    </div>
+                    <div class="camera-fallback" id="admin-ocr-fallback">
+                        <span>📷 Camera blocked or unavailable</span>
+                        <small>Use the upload button below to select any passport photo</small>
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-primary" id="admin-ocr-snap">Snap Document</button>
+                    <div class="btn-subgroup" id="admin-ocr-subgroup" style="display:none; width: 100%; gap: 0.5rem;">
+                        <button class="btn btn-outline" id="admin-ocr-crop" style="flex:1;">✂️ Crop / Adjust</button>
+                        <button class="btn btn-outline" id="admin-ocr-retake" style="flex:1;">🔄 Retake</button>
+                    </div>
+                    <label class="btn btn-outline" style="cursor:pointer;">
+                        📁 Take Photo / Upload Document Image
+                        <input type="file" id="admin-ocr-file" accept="image/*" capture="environment" style="display:none;">
+                    </label>
+                </div>
+            </div>
+
+            <!-- OCR Module Controls -->
+            <div class="settings-card">
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>OCR Strictness Slider</span>
+                        <span class="slider-val" id="admin-ocr-strict-val">50</span>
+                    </div>
+                    <input type="range" id="admin-ocr-strict-slider" min="0" max="100" value="50">
+                    <div class="slider-caption">
+                        <span>0: Loose (Bigger Bounding Box)</span>
+                        <span>100: Strict (Tight Core Box)</span>
+                    </div>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Document Type</span>
+                    </div>
+                    <select id="admin-ocr-type">
+                        <option value="passport">Passport</option>
+                        <option value="id_card">National ID</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="cta-container">
+                <button class="btn btn-primary btn-lg" id="run-admin-ocr-btn" style="max-width: 380px;">
+                    🔍 Test OCR Extraction Only
+                </button>
+                <div class="spinner" id="admin-ocr-spinner"></div>
+            </div>
+
+            <!-- OCR Results View -->
+            <div class="results-box" id="admin-ocr-results">
+                <div class="results-header">
+                    <h2>OCR Extraction Breakdown</h2>
+                    <span class="status-badge" id="admin-ocr-badge">Success</span>
+                </div>
+
+                <!-- Identity Fields Grid -->
+                <ul class="field-list" id="admin-ocr-fields"></ul>
+
+                <!-- Raw OCR Collapsible -->
+                <details style="margin-top: 1rem;">
+                    <summary style="cursor:pointer; color:var(--text-muted); font-weight: 600; padding: 0.5rem 0;">
+                        🔍 View Raw Tesseract Output & Passes
+                    </summary>
+                    <pre id="admin-ocr-raw" style="margin-top: 0.5rem;"></pre>
+                </details>
+            </div>
+        </section>
+
+
+        <!-- ========================================== -->
+        <!-- TAB 3: FACE VERIFICATION ADMIN             -->
+        <!-- ========================================== -->
+        <section class="tab-panel" id="panel-face">
+            <div class="card-grid">
+                <!-- Face 1 Probe -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">👤 Face 1 (Live Probe / Selfie)</div>
+                        <span class="tag-pill">Probe</span>
+                    </div>
+                    <div class="media-frame" id="admin-face1-frame">
+                        <video id="admin-face1-video" autoplay playsinline muted></video>
+                        <img id="admin-face1-preview" class="preview-img" alt="Face 1 preview">
+                        <div class="camera-guide face-guide" id="admin-face1-guide">
+                            <svg class="guide-svg" viewBox="0 0 400 300">
+                                <defs>
+                                    <mask id="admin-face1-mask">
+                                        <rect width="400" height="300" fill="white" />
+                                        <path d="M 200, 26 C 258, 26 280, 72 280, 134 C 280, 196 238, 248 200, 248 C 162, 248 120, 196 120, 134 C 120, 72 142, 26 200, 26 Z" fill="black" />
+                                    </mask>
+                                </defs>
+                                <rect width="400" height="300" fill="rgba(4, 7, 14, 0.6)" mask="url(#admin-face1-mask)" />
+                                <path class="face-biometric-contour" d="M 200, 26 C 258, 26 280, 72 280, 134 C 280, 196 238, 248 200, 248 C 162, 248 120, 196 120, 134 C 120, 72 142, 26 200, 26 Z" />
+                                <line class="face-biometric-tick" x1="200" y1="14" x2="200" y2="22" />
+                                <line class="face-biometric-tick" x1="200" y1="252" x2="200" y2="260" />
+                                <line class="face-biometric-tick" x1="108" y1="134" x2="116" y2="134" />
+                                <line class="face-biometric-tick" x1="284" y1="134" x2="292" y2="134" />
+                                <line x1="150" y1="112" x2="250" y2="112" stroke="rgba(255,255,255,0.25)" stroke-dasharray="3 3" stroke-width="1" />
+                            </svg>
+                            <div class="guide-tag">
+                                <span class="pulse-dot"></span>
+                                <span>Position Face in Biometric Zone</span>
+                            </div>
+                        </div>
+                        <div class="camera-fallback" id="admin-face1-fallback">
+                            <span>📷 Camera blocked or unavailable</span>
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" id="admin-face1-snap">Snap Face 1</button>
+                        <div class="btn-subgroup" id="admin-face1-subgroup" style="display:none; width: 100%; gap: 0.5rem;">
+                            <button class="btn btn-outline" id="admin-face1-crop" style="flex:1;">✂️ Crop / Adjust</button>
+                            <button class="btn btn-outline" id="admin-face1-retake" style="flex:1;">🔄 Retake</button>
+                        </div>
+                        <label class="btn btn-outline" style="cursor:pointer;">
+                            📁 Take Photo / Upload Image 1
+                            <input type="file" id="admin-face1-file" accept="image/*" capture="user" style="display:none;">
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Face 2 Reference -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">📄 Face 2 (ID Document / Ref)</div>
+                        <span class="tag-pill">Reference</span>
+                    </div>
+                    <div class="media-frame" id="admin-face2-frame">
+                        <video id="admin-face2-video" autoplay playsinline muted></video>
+                        <img id="admin-face2-preview" class="preview-img" alt="Face 2 preview">
+                        <div class="camera-guide doc-guide" id="admin-face2-guide">
+                            <svg class="guide-svg" viewBox="0 0 400 300">
+                                <defs>
+                                    <mask id="admin-face2-mask">
+                                        <rect width="400" height="300" fill="white" />
+                                        <rect id="admin-face2-cutout" x="35" y="38" width="330" height="224" rx="10" fill="black" />
+                                    </mask>
+                                </defs>
+                                <rect width="400" height="300" fill="rgba(4, 7, 14, 0.6)" mask="url(#admin-face2-mask)" />
+                                <rect id="admin-face2-box" class="doc-svg-box" x="35" y="38" width="330" height="224" rx="10" />
+                                <path id="admin-face2-brackets" class="doc-svg-bracket" d="M 55,38 L 35,38 L 35,58 M 345,38 L 365,38 L 365,58 M 35,242 L 35,262 L 55,262 M 365,242 L 365,262 L 345,262" />
+                            </svg>
+                            <div class="guide-tag">
+                                <span class="pulse-dot blue"></span>
+                                <span id="admin-face2-caption">Align Document Inside Frame</span>
+                            </div>
+                        </div>
+                        <div class="camera-fallback" id="admin-face2-fallback">
+                            <span>📷 Camera blocked or unavailable</span>
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" id="admin-face2-snap">Snap Face 2</button>
+                        <div class="btn-subgroup" id="admin-face2-subgroup" style="display:none; width: 100%; gap: 0.5rem;">
+                            <button class="btn btn-outline" id="admin-face2-crop" style="flex:1;">✂️ Crop / Adjust</button>
+                            <button class="btn btn-outline" id="admin-face2-retake" style="flex:1;">🔄 Retake</button>
+                        </div>
+                        <label class="btn btn-outline" style="cursor:pointer;">
+                            📁 Take Photo / Upload Image 2
+                            <input type="file" id="admin-face2-file" accept="image/*" capture="environment" style="display:none;">
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Face Model Tuning Settings -->
+            <div class="settings-card">
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Face Strictness</span>
+                        <span class="slider-val" id="admin-face-strict-val">50</span>
+                    </div>
+                    <input type="range" id="admin-face-strict-slider" min="0" max="100" value="50">
+                    <div class="slider-caption">
+                        <span>Loose (High Tolerance)</span>
+                        <span>Strict (Zero Imposter Risk)</span>
+                    </div>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Face Recognition Model</span>
+                    </div>
+                    <select id="admin-face-model">
+                        <option value="Facenet512" selected>Facenet512 (Recommended - 512D Embeddings)</option>
+                        <option value="VGG-Face">VGG-Face</option>
+                        <option value="ArcFace">ArcFace</option>
+                        <option value="GhostFaceNet">GhostFaceNet</option>
+                    </select>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Face Detector Backend</span>
+                    </div>
+                    <select id="admin-face-detector">
+                        <option value="opencv" selected>opencv (Haar Cascade - Fast & Stable)</option>
+                        <option value="ssd">ssd (Deep Neural Net)</option>
+                        <option value="mtcnn">mtcnn</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="cta-container">
+                <button class="btn btn-primary btn-lg" id="run-admin-face-btn" style="max-width: 380px;">
+                    👥 Test Face Verification Only
+                </button>
+                <div class="spinner" id="admin-face-spinner"></div>
+            </div>
+
+            <!-- Face Results View -->
+            <div class="results-box" id="admin-face-results">
+                <div class="results-header">
+                    <h2>Face Verification Metrics</h2>
+                    <span class="status-badge" id="admin-face-badge">Match</span>
+                </div>
+
+                <div id="admin-face-details"></div>
+            </div>
+        </section>
+
+    <!-- Interactive Image Cropper Modal -->
+    <div id="cropper-modal" class="cropper-modal" style="display:none;">
+        <div class="cropper-backdrop" id="cropper-backdrop"></div>
+        <div class="cropper-dialog">
+            <div class="cropper-header">
+                <div class="cropper-title">
+                    <span id="cropper-icon">✂️</span>
+                    <span id="cropper-heading">Crop & Adjust Frame</span>
+                </div>
+                <button type="button" class="cropper-close-btn" id="cropper-close-btn" aria-label="Close cropper">&times;</button>
+            </div>
+
+            <div class="cropper-body">
+                <div class="cropper-stage" id="cropper-stage">
+                    <canvas id="cropper-canvas"></canvas>
+                    <div class="cropper-marquee" id="cropper-marquee">
+                        <div class="crop-grid-h1"></div>
+                        <div class="crop-grid-h2"></div>
+                        <div class="crop-grid-v1"></div>
+                        <div class="crop-grid-v2"></div>
+                        <div class="crop-face-oval" id="cropper-face-oval" style="display:none;"></div>
+                        <!-- 8 Resize Handles -->
+                        <div class="crop-handle handle-nw" data-handle="nw"></div>
+                        <div class="crop-handle handle-ne" data-handle="ne"></div>
+                        <div class="crop-handle handle-sw" data-handle="sw"></div>
+                        <div class="crop-handle handle-se" data-handle="se"></div>
+                        <div class="crop-handle handle-n" data-handle="n"></div>
+                        <div class="crop-handle handle-s" data-handle="s"></div>
+                        <div class="crop-handle handle-w" data-handle="w"></div>
+                        <div class="crop-handle handle-e" data-handle="e"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cropper-footer">
+                <div class="cropper-toolbar-left">
+                    <button type="button" class="btn btn-outline btn-sm" id="cropper-rotate-btn" title="Rotate 90° Clockwise">
+                        🔄 Rotate 90°
+                    </button>
+                    <div class="cropper-presets" id="cropper-presets">
+                        <button type="button" class="preset-btn active" data-ratio="free">Free</button>
+                        <button type="button" class="preset-btn" data-ratio="1:1">1:1 Face</button>
+                        <button type="button" class="preset-btn" data-ratio="passport">Passport</button>
+                        <button type="button" class="preset-btn" data-ratio="id_card">ID Card</button>
+                    </div>
+                </div>
+                <div class="cropper-toolbar-right">
+                    <button type="button" class="btn btn-outline btn-sm" id="cropper-skip-btn">Full Image</button>
+                    <button type="button" class="btn btn-primary btn-sm" id="cropper-apply-btn">✂️ Apply Crop</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching logic
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+
+            document.getElementById(`tab-${tabName}-btn`).classList.add('active');
+            document.getElementById(`panel-${tabName}`).classList.add('active');
+
+            // Initialize camera for visible tab
+            if (tabName === 'pipeline') {
+                initCamera('pipe-person-video', 'user', 'pipe-person-fallback');
+                initCamera('pipe-doc-video', 'environment', 'pipe-doc-fallback');
+            } else if (tabName === 'ocr') {
+                initCamera('admin-ocr-video', 'environment', 'admin-ocr-fallback');
+            } else if (tabName === 'face') {
+                initCamera('admin-face1-video', 'user', 'admin-face1-fallback');
+                initCamera('admin-face2-video', 'environment', 'admin-face2-fallback');
+            }
+        }
+
+        // Camera Initialization with Safe Fallback for Mobile HTTP
+        const activeStreams = {};
+        async function initCamera(videoId, facingMode, fallbackId) {
+            const video = document.getElementById(videoId);
+            const fallback = document.getElementById(fallbackId);
+            if (!video || activeStreams[videoId]) return;
+
+            const parent = video.parentElement;
+            const guide = parent ? parent.querySelector('.camera-guide') : null;
+
+            // Check if mediaDevices is supported (strictly blocked on non-localhost HTTP on mobile)
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                console.warn(`Camera access not supported on this context (HTTP non-localhost) for ${videoId}`);
+                if (fallback) {
+                    fallback.style.display = 'flex';
+                    fallback.innerHTML = `
+                        <span style="font-size: 1.5rem; margin-bottom: 0.25rem;">🔒</span>
+                        <strong style="color: #f8fafc; font-size: 0.9rem;">Live Camera Requires HTTPS</strong>
+                        <small style="color: #94a3b8; font-size: 0.78rem; line-height: 1.35; max-width: 280px;">
+                            Mobile browsers disable in-page camera streaming over plain HTTP. Start server with <code>--ssl</code> or tap below to snap & align in our interactive viewfinder:
+                        </small>
+                    `;
+                }
+                if (video) video.style.display = 'none';
+                if (guide) guide.style.display = 'none';
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: false
+                });
+                video.srcObject = stream;
+                activeStreams[videoId] = stream;
+                if (fallback) fallback.style.display = 'none';
+                video.style.display = 'block';
+                if (guide) guide.style.display = 'flex';
+            } catch (err) {
+                console.warn(`getUserMedia failed for ${videoId}:`, err.name, err.message);
+                if (fallback) fallback.style.display = 'flex';
+                if (video) video.style.display = 'none';
+                if (guide) guide.style.display = 'none';
+            }
+        }
+
+        // ==============================================
+        // INTERACTIVE CANVAS CROPPER CONTROLLER
+        // ==============================================
+        class ImageCropper {
+            constructor() {
+                this.modal = document.getElementById('cropper-modal');
+                this.backdrop = document.getElementById('cropper-backdrop');
+                this.stage = document.getElementById('cropper-stage');
+                this.canvas = document.getElementById('cropper-canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.marquee = document.getElementById('cropper-marquee');
+                this.faceOval = document.getElementById('cropper-face-oval');
+                this.closeBtn = document.getElementById('cropper-close-btn');
+                this.rotateBtn = document.getElementById('cropper-rotate-btn');
+                this.applyBtn = document.getElementById('cropper-apply-btn');
+                this.skipBtn = document.getElementById('cropper-skip-btn');
+                this.presetBtns = document.querySelectorAll('.preset-btn');
+                this.heading = document.getElementById('cropper-heading');
+
+                this.currentImage = null;
+                this.rotation = 0; // 0, 90, 180, 270
+                this.cropBox = { x: 0, y: 0, w: 100, h: 100 };
+                this.activeRatio = 'free';
+                this.ratioValues = {
+                    'free': null,
+                    '1:1': 1.0,
+                    'passport': 1.42,
+                    'id_card': 1.586
+                };
+
+                this.stageBounds = { w: 0, h: 0 };
+                this.dispBounds = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
+                this.isDragging = false;
+                this.dragMode = null;
+                this.dragStart = { x: 0, y: 0, boxX: 0, boxY: 0, boxW: 0, boxH: 0 };
+
+                this.onApplyCallback = null;
+                this.onSkipCallback = null;
+
+                this._initEvents();
+            }
+
+            _initEvents() {
+                this.closeBtn.addEventListener('click', () => this.close(true));
+                this.backdrop.addEventListener('click', () => this.close(true));
+
+                this.rotateBtn.addEventListener('click', () => {
+                    this.rotation = (this.rotation + 90) % 360;
+                    this.render();
+                    this.resetCropBoxToCurrentRatio();
+                });
+
+                this.presetBtns.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        this.presetBtns.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        this.setRatio(btn.dataset.ratio);
+                    });
+                });
+
+                this.applyBtn.addEventListener('click', () => this.applyCrop());
+                this.skipBtn.addEventListener('click', () => this.skipCrop());
+
+                const onStart = (clientX, clientY, target) => {
+                    const handle = target.dataset.handle;
+                    this.isDragging = true;
+                    this.dragMode = handle || 'move';
+                    this.dragStart = {
+                        x: clientX,
+                        y: clientY,
+                        boxX: this.cropBox.x,
+                        boxY: this.cropBox.y,
+                        boxW: this.cropBox.w,
+                        boxH: this.cropBox.h
+                    };
+                };
+
+                const onMove = (clientX, clientY) => {
+                    if (!this.isDragging) return;
+                    const dx = clientX - this.dragStart.x;
+                    const dy = clientY - this.dragStart.y;
+                    this.updateDrag(dx, dy);
+                };
+
+                const onEnd = () => {
+                    this.isDragging = false;
+                    this.dragMode = null;
+                };
+
+                this.marquee.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    onStart(e.clientX, e.clientY, e.target);
+                });
+
+                window.addEventListener('mousemove', (e) => {
+                    if (this.isDragging) {
+                        e.preventDefault();
+                        onMove(e.clientX, e.clientY);
+                    }
+                });
+
+                window.addEventListener('mouseup', () => onEnd());
+
+                this.marquee.addEventListener('touchstart', (e) => {
+                    if (e.touches.length === 1) {
+                        e.preventDefault();
+                        onStart(e.touches[0].clientX, e.touches[0].clientY, e.target);
+                    }
+                }, { passive: false });
+
+                window.addEventListener('touchmove', (e) => {
+                    if (this.isDragging && e.touches.length === 1) {
+                        e.preventDefault();
+                        onMove(e.touches[0].clientX, e.touches[0].clientY);
+                    }
+                }, { passive: false });
+
+                window.addEventListener('touchend', () => onEnd());
+                window.addEventListener('touchcancel', () => onEnd());
+            }
+
+            open(blob, slotType = 'doc', defaultPreset = null, onApply, onSkip, onCancel = null) {
+                this.onApplyCallback = onApply;
+                this.onSkipCallback = onSkip;
+                this.onCancelCallback = onCancel;
+                this.rotation = 0;
+                this.slotType = slotType;
+
+                if (slotType === 'face') {
+                    this.heading.textContent = '✂️ Align & Crop Face';
+                    this.activeRatio = defaultPreset || '1:1';
+                    this.faceOval.style.display = 'block';
+                    this.marquee.classList.add('face-mode');
+                } else {
+                    this.heading.textContent = '✂️ Align & Crop Document';
+                    this.activeRatio = defaultPreset || 'passport';
+                    this.faceOval.style.display = 'none';
+                    this.marquee.classList.remove('face-mode');
+                }
+
+                this.presetBtns.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.ratio === this.activeRatio);
+                });
+
+                const url = URL.createObjectURL(blob);
+                const img = new Image();
+                img.onload = () => {
+                    this.currentImage = img;
+                    this.modal.style.display = 'flex';
+                    requestAnimationFrame(() => {
+                        this.render();
+                        this.resetCropBoxToCurrentRatio();
+                    });
+                    URL.revokeObjectURL(url);
+                };
+                img.src = url;
+            }
+
+            close(isCancel = false) {
+                this.modal.style.display = 'none';
+                this.currentImage = null;
+                if (isCancel && this.onCancelCallback) {
+                    this.onCancelCallback();
+                }
+            }
+
+            setRatio(ratio) {
+                this.activeRatio = ratio;
+                if (ratio === '1:1' && this.slotType === 'face') {
+                    this.faceOval.style.display = 'block';
+                    this.marquee.classList.add('face-mode');
+                } else {
+                    this.faceOval.style.display = 'none';
+                    this.marquee.classList.remove('face-mode');
+                }
+                this.resetCropBoxToCurrentRatio();
+            }
+
+            resetCropBoxToCurrentRatio() {
+                const d = this.dispBounds;
+                if (!d.w || !d.h) return;
+                const targetRatio = this.ratioValues[this.activeRatio];
+
+                let w, h;
+                if (this.slotType === 'face') {
+                    w = d.w * 0.65;
+                    h = targetRatio ? w / targetRatio : d.h * 0.65;
+                } else {
+                    w = d.w * 0.85;
+                    h = targetRatio ? w / targetRatio : d.h * 0.85;
+                }
+
+                if (h > d.h * 0.95) {
+                    h = d.h * 0.95;
+                    if (targetRatio) w = h * targetRatio;
+                }
+                if (w > d.w * 0.95) {
+                    w = d.w * 0.95;
+                    if (targetRatio) h = w / targetRatio;
+                }
+
+                const x = d.x + (d.w - w) / 2;
+                const y = d.y + (d.h - h) / 2;
+
+                this.cropBox = { x, y, w, h };
+                this.updateMarqueeStyle();
+            }
+
+            render() {
+                if (!this.currentImage) return;
+
+                const stageRect = this.stage.getBoundingClientRect();
+                this.stageBounds = { w: stageRect.width, h: stageRect.height };
+
+                const isRotated = (this.rotation === 90 || this.rotation === 270);
+                const origW = this.currentImage.naturalWidth;
+                const origH = this.currentImage.naturalHeight;
+                const effW = isRotated ? origH : origW;
+                const effH = isRotated ? origW : origH;
+
+                const pad = 24;
+                const availW = Math.max(100, this.stageBounds.w - pad * 2);
+                const availH = Math.max(100, this.stageBounds.h - pad * 2);
+
+                const scale = Math.min(availW / effW, availH / effH);
+                const dispW = Math.round(effW * scale);
+                const dispH = Math.round(effH * scale);
+                const dispX = Math.round((this.stageBounds.w - dispW) / 2);
+                const dispY = Math.round((this.stageBounds.h - dispH) / 2);
+
+                this.dispBounds = { x: dispX, y: dispY, w: dispW, h: dispH, scale, effW, effH, origW, origH };
+
+                this.canvas.width = dispW;
+                this.canvas.height = dispH;
+                this.canvas.style.left = `${dispX}px`;
+                this.canvas.style.top = `${dispY}px`;
+                this.canvas.style.width = `${dispW}px`;
+                this.canvas.style.height = `${dispH}px`;
+
+                this.ctx.clearRect(0, 0, dispW, dispH);
+                this.ctx.save();
+                this.ctx.translate(dispW / 2, dispH / 2);
+                this.ctx.rotate((this.rotation * Math.PI) / 180);
+
+                const drawW = (isRotated ? dispH : dispW);
+                const drawH = (isRotated ? dispW : dispH);
+                this.ctx.drawImage(this.currentImage, -drawW / 2, -drawH / 2, drawW, drawH);
+                this.ctx.restore();
+            }
+
+            updateDrag(dx, dy) {
+                const d = this.dispBounds;
+                const s = this.dragStart;
+                const ratio = this.ratioValues[this.activeRatio];
+                const minSize = 40;
+
+                if (this.dragMode === 'move') {
+                    let newX = s.boxX + dx;
+                    let newY = s.boxY + dy;
+                    newX = Math.max(d.x, Math.min(d.x + d.w - s.boxW, newX));
+                    newY = Math.max(d.y, Math.min(d.y + d.h - s.boxH, newY));
+                    this.cropBox.x = newX;
+                    this.cropBox.y = newY;
+                } else {
+                    let x1 = s.boxX;
+                    let y1 = s.boxY;
+                    let x2 = s.boxX + s.boxW;
+                    let y2 = s.boxY + s.boxH;
+
+                    const mode = this.dragMode;
+                    if (mode.includes('w')) x1 = Math.min(x2 - minSize, Math.max(d.x, s.boxX + dx));
+                    if (mode.includes('e')) x2 = Math.max(x1 + minSize, Math.min(d.x + d.w, s.boxX + s.boxW + dx));
+                    if (mode.includes('n')) y1 = Math.min(y2 - minSize, Math.max(d.y, s.boxY + dy));
+                    if (mode.includes('s')) y2 = Math.max(y1 + minSize, Math.min(d.y + d.h, s.boxY + s.boxH + dy));
+
+                    let curW = x2 - x1;
+                    let curH = y2 - y1;
+
+                    if (ratio) {
+                        if (mode === 'n' || mode === 's') {
+                            curW = curH * ratio;
+                            x1 = (s.boxX + s.boxW / 2) - curW / 2;
+                            x2 = x1 + curW;
+                        } else {
+                            curH = curW / ratio;
+                            if (mode.includes('n')) y1 = y2 - curH;
+                            else y2 = y1 + curH;
+                        }
+                    }
+
+                    if (x1 < d.x) { x1 = d.x; if (ratio) curH = (x2 - x1) / ratio; }
+                    if (x2 > d.x + d.w) { x2 = d.x + d.w; if (ratio) curH = (x2 - x1) / ratio; }
+                    if (y1 < d.y) { y1 = d.y; if (ratio) { curW = (y2 - y1) * ratio; x2 = x1 + curW; } }
+                    if (y2 > d.y + d.h) { y2 = d.y + d.h; if (ratio) { curW = (y2 - y1) * ratio; x2 = x1 + curW; } }
+
+                    this.cropBox = {
+                        x: x1,
+                        y: y1,
+                        w: Math.max(minSize, x2 - x1),
+                        h: Math.max(minSize, y2 - y1)
+                    };
+                }
+
+                this.updateMarqueeStyle();
+            }
+
+            updateMarqueeStyle() {
+                this.marquee.style.left = `${this.cropBox.x}px`;
+                this.marquee.style.top = `${this.cropBox.y}px`;
+                this.marquee.style.width = `${this.cropBox.w}px`;
+                this.marquee.style.height = `${this.cropBox.h}px`;
+            }
+
+            applyCrop() {
+                if (!this.currentImage || !this.onApplyCallback) return;
+
+                const d = this.dispBounds;
+                const normX = (this.cropBox.x - d.x) / d.w;
+                const normY = (this.cropBox.y - d.y) / d.h;
+                const normW = this.cropBox.w / d.w;
+                const normH = this.cropBox.h / d.h;
+
+                const offscreen = document.createElement('canvas');
+                offscreen.width = d.effW;
+                offscreen.height = d.effH;
+                const oCtx = offscreen.getContext('2d');
+
+                const isRotated = (this.rotation === 90 || this.rotation === 270);
+                oCtx.translate(d.effW / 2, d.effH / 2);
+                oCtx.rotate((this.rotation * Math.PI) / 180);
+                const drawW = isRotated ? d.effH : d.effW;
+                const drawH = isRotated ? d.effW : d.effH;
+                oCtx.drawImage(this.currentImage, -drawW / 2, -drawH / 2, drawW, drawH);
+
+                const srcX = Math.round(normX * d.effW);
+                const srcY = Math.round(normY * d.effH);
+                const srcW = Math.round(normW * d.effW);
+                const srcH = Math.round(normH * d.effH);
+
+                const cropCanvas = document.createElement('canvas');
+                cropCanvas.width = Math.max(1, srcW);
+                cropCanvas.height = Math.max(1, srcH);
+                const cCtx = cropCanvas.getContext('2d');
+                cCtx.drawImage(offscreen, srcX, srcY, srcW, srcH, 0, 0, cropCanvas.width, cropCanvas.height);
+
+                cropCanvas.toBlob((blob) => {
+                    this.onApplyCallback(blob);
+                    this.close();
+                }, 'image/jpeg', 0.95);
+            }
+
+            skipCrop() {
+                if (!this.currentImage || !this.onSkipCallback) return;
+                const d = this.dispBounds;
+                const offscreen = document.createElement('canvas');
+                offscreen.width = d.effW;
+                offscreen.height = d.effH;
+                const oCtx = offscreen.getContext('2d');
+
+                const isRotated = (this.rotation === 90 || this.rotation === 270);
+                oCtx.translate(d.effW / 2, d.effH / 2);
+                oCtx.rotate((this.rotation * Math.PI) / 180);
+                const drawW = isRotated ? d.effH : d.effW;
+                const drawH = isRotated ? d.effW : d.effH;
+                oCtx.drawImage(this.currentImage, -drawW / 2, -drawH / 2, drawW, drawH);
+
+                offscreen.toBlob((blob) => {
+                    this.onSkipCallback(blob);
+                    this.close();
+                }, 'image/jpeg', 0.95);
+            }
+        }
+
+        window.alephCropper = new ImageCropper();
+
+        // Setup image slot handler (supports camera snap, file upload, drag-and-drop, interactive crop)
+        function bindImageSlot(prefix, isBackCam = false, slotType = 'doc') {
+            const frame = document.getElementById(`${prefix}-frame`);
+            const video = document.getElementById(`${prefix}-video`);
+            const preview = document.getElementById(`${prefix}-preview`);
+            const snapBtn = document.getElementById(`${prefix}-snap`);
+            const retakeBtn = document.getElementById(`${prefix}-retake`);
+            const cropBtn = document.getElementById(`${prefix}-crop`);
+            const subGroup = document.getElementById(`${prefix}-subgroup`);
+            const fileInput = document.getElementById(`${prefix}-file`);
+            
+            let rawBlob = null;
+            let croppedBlob = null;
+
+            function getActiveDocPreset() {
+                if (slotType === 'face') return '1:1';
+                let docVal = 'passport';
+                if (prefix.startsWith('pipe-doc')) {
+                    const el = document.getElementById('pipe-doc-type');
+                    if (el) docVal = el.value;
+                } else if (prefix.startsWith('admin-ocr')) {
+                    const el = document.getElementById('admin-ocr-type');
+                    if (el) docVal = el.value;
+                }
+                return (docVal === 'id_card' || docVal === 'driving_license') ? 'id_card' : 'passport';
+            }
+
+            function launchCropper(blob) {
+                rawBlob = blob;
+                const preset = getActiveDocPreset();
+                window.alephCropper.open(
+                    blob, 
+                    slotType, 
+                    preset,
+                    (newCropped) => {
+                        setSlotImage(newCropped);
+                    },
+                    (fullBlob) => {
+                        setSlotImage(fullBlob);
+                    },
+                    () => {
+                        // Fallback on modal close without cropping: default to full uncropped image
+                        if (!croppedBlob) {
+                            setSlotImage(blob);
+                        }
+                    }
+                );
+            }
+
+            // Snap from video stream
+            if (snapBtn && video) {
+                snapBtn.addEventListener('click', () => {
+                    if (!video.srcObject) {
+                        fileInput.click();
+                        return;
+                    }
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth || 1280;
+                    canvas.height = video.videoHeight || 720;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    canvas.toBlob((blob) => {
+                        launchCropper(blob);
+                    }, 'image/jpeg', 0.95);
+                });
+            }
+
+            // File upload / native camera handler
+            if (fileInput) {
+                fileInput.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        launchCropper(file);
+                    }
+                });
+            }
+
+            // Retake button
+            if (retakeBtn) {
+                retakeBtn.addEventListener('click', () => {
+                    rawBlob = null;
+                    croppedBlob = null;
+                    preview.style.display = 'none';
+                    preview.src = '';
+                    if (frame) frame.classList.remove('has-preview');
+                    if (video && activeStreams[video.id]) {
+                        video.style.display = 'block';
+                    }
+                    if (snapBtn) snapBtn.style.display = 'block';
+                    if (subGroup) subGroup.style.display = 'none';
+                });
+            }
+
+            // Crop / Adjust button
+            if (cropBtn) {
+                cropBtn.addEventListener('click', () => {
+                    if (rawBlob) {
+                        launchCropper(rawBlob);
+                    }
+                });
+            }
+
+            function setSlotImage(blob) {
+                croppedBlob = blob;
+                const url = URL.createObjectURL(blob);
+                preview.src = url;
+                preview.style.display = 'block';
+                if (frame) frame.classList.add('has-preview');
+                if (video) video.style.display = 'none';
+                if (snapBtn) snapBtn.style.display = 'none';
+                if (subGroup) subGroup.style.display = 'flex';
+            }
+
+            return {
+                getBlob: () => croppedBlob || rawBlob,
+                setBlob: setSlotImage
+            };
+        }
+
+        // Dynamic Document Guide Updates based on document selection
+        function updateDocGuides(docType) {
+            const isCard = (docType === 'id_card' || docType === 'driving_license');
+            
+            const cutouts = ['pipe-doc-cutout', 'admin-ocr-cutout', 'admin-face2-cutout'];
+            const boxes = ['pipe-doc-box', 'admin-ocr-box', 'admin-face2-box'];
+            const brackets = ['pipe-doc-brackets', 'admin-ocr-brackets', 'admin-face2-brackets'];
+            const captions = ['pipe-doc-caption', 'admin-ocr-caption', 'admin-face2-caption'];
+
+            cutouts.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.setAttribute('y', isCard ? '46' : '38');
+                    el.setAttribute('height', isCard ? '208' : '224');
+                    el.setAttribute('rx', isCard ? '16' : '10');
+                }
+            });
+
+            boxes.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.setAttribute('y', isCard ? '46' : '38');
+                    el.setAttribute('height', isCard ? '208' : '224');
+                    el.setAttribute('rx', isCard ? '16' : '10');
+                    el.classList.toggle('id_card', isCard);
+                }
+            });
+
+            brackets.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    const y1 = isCard ? 46 : 38;
+                    const y2 = isCard ? 254 : 262;
+                    el.setAttribute('d', `M 55,${y1} L 35,${y1} L 35,${y1+20} M 345,${y1} L 365,${y1} L 365,${y1+20} M 35,${y2-20} L 35,${y2} L 55,${y2} M 365,${y2-20} L 365,${y2} L 345,${y2}`);
+                    el.classList.toggle('id_card', isCard);
+                }
+            });
+
+            captions.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.textContent = isCard ? 'Align ID Card Inside Frame' : 'Align Passport Inside Frame';
+                }
+            });
+        }
+
+        const pipeDocTypeSelect = document.getElementById('pipe-doc-type');
+        if (pipeDocTypeSelect) {
+            pipeDocTypeSelect.addEventListener('change', (e) => {
+                updateDocGuides(e.target.value);
+            });
+        }
+        const adminOcrTypeSelect = document.getElementById('admin-ocr-type');
+        if (adminOcrTypeSelect) {
+            adminOcrTypeSelect.addEventListener('change', (e) => {
+                updateDocGuides(e.target.value);
+            });
+        }
+
+        // Bind slots
+        const pipePersonSlot = bindImageSlot('pipe-person', false, 'face');
+        const pipeDocSlot = bindImageSlot('pipe-doc', true, 'doc');
+        const adminOcrSlot = bindImageSlot('admin-ocr', true, 'doc');
+        const adminFace1Slot = bindImageSlot('admin-face1', false, 'face');
+        const adminFace2Slot = bindImageSlot('admin-face2', true, 'doc');
+
+        // Bind Slider Label updates
+        function bindSlider(id, valId) {
+            const slider = document.getElementById(id);
+            const val = document.getElementById(valId);
+            if (slider && val) {
+                slider.addEventListener('input', (e) => {
+                    val.textContent = e.target.value;
+                });
+            }
+        }
+        bindSlider('pipe-face-slider', 'pipe-face-val');
+        bindSlider('pipe-ocr-slider', 'pipe-ocr-val');
+        bindSlider('admin-ocr-strict-slider', 'admin-ocr-strict-val');
+        bindSlider('admin-face-strict-slider', 'admin-face-strict-val');
+
+        // =======================================================
+        // TAB 1: FULL PIPELINE EXECUTION
+        // =======================================================
+        document.getElementById('run-pipeline-btn').addEventListener('click', async () => {
+            const personBlob = pipePersonSlot.getBlob();
+            const docBlob = pipeDocSlot.getBlob();
+
+            if (!personBlob || !docBlob) {
+                alert('Please snap or upload both a Person photo and an ID Document photo.');
+                return;
+            }
+
+            const btn = document.getElementById('run-pipeline-btn');
+            const spinner = document.getElementById('pipeline-spinner');
+            const resultsBox = document.getElementById('pipeline-results');
+
+            btn.style.display = 'none';
+            spinner.style.display = 'block';
+            resultsBox.style.display = 'none';
+
+            try {
+                // 1. Upload files
+                const formData = new FormData();
+                formData.append('person', personBlob, 'person.jpg');
+                formData.append('document', docBlob, 'document.jpg');
+
+                const uploadRes = await fetch('/upload', { method: 'POST', body: formData });
+                if (!uploadRes.ok) throw new Error('Failed to upload image files to server');
+
+                const faceStrict = document.getElementById('pipe-face-slider').value;
+                const ocrStrict = document.getElementById('pipe-ocr-slider').value;
+                const docType = document.getElementById('pipe-doc-type').value;
+
+                // 2. Parallel Face Match + OCR
+                const [faceRes, ocrRes] = await Promise.all([
+                    fetch(`/verify_photo?face_strictness=${faceStrict}`, { method: 'POST' }),
+                    fetch(`/extract_text?type=${docType}&ocr_strictness=${ocrStrict}`, { method: 'POST' })
+                ]);
+
+                const faceData = await faceRes.json();
+                const ocrData = await ocrRes.json();
+
+                // Render Results
+                renderPipelineResults(faceData, ocrData);
+                resultsBox.style.display = 'block';
+                resultsBox.scrollIntoView({ behavior: 'smooth' });
+
+            } catch (err) {
+                alert(`Pipeline Error: ${err.message}`);
+            } finally {
+                btn.style.display = 'block';
+                spinner.style.display = 'none';
+            }
+        });
+
+        function renderPipelineResults(faceData, ocrData) {
+            const overallBadge = document.getElementById('pipeline-overall-badge');
+            const faceContainer = document.getElementById('pipe-face-res');
+            const ocrContainer = document.getElementById('pipe-ocr-res');
+
+            // Face Result
+            if (faceData.status === 'success' && faceData.verification) {
+                const v = faceData.verification;
+                const matchClass = v.is_match ? 'status-match' : 'status-nomatch';
+                faceContainer.innerHTML = `
+                    <div style="font-size: 1.5rem; font-weight: 800; color: ${v.is_match ? 'var(--success)' : 'var(--danger)'}; margin-bottom: 0.5rem;">
+                        ${v.is_match ? '✅ MATCH' : '❌ NO MATCH'}
+                    </div>
+                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Trust Score:</strong> ${v.trust_score ? v.trust_score.toFixed(1) : 0}/100</div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted);">Distance: ${v.distance} (Threshold: ${v.threshold})</div>
+                `;
+                overallBadge.className = `status-badge ${matchClass}`;
+                overallBadge.textContent = v.is_match ? 'Verified' : 'Flagged';
+            } else {
+                faceContainer.innerHTML = `<p style="color:var(--danger)">Error: ${faceData.error || 'Face verification failed'}</p>`;
+                overallBadge.className = 'status-badge status-nomatch';
+                overallBadge.textContent = 'Error';
+            }
+
+            // OCR Result
+            if (ocrData.status === 'warning') {
+                ocrContainer.innerHTML = `
+                    <div style="color: #fbbf24; font-size: 0.9rem; margin-bottom: 0.5rem;">⚠️ ${ocrData.message}</div>
+                `;
+            } else if (ocrData.status === 'success') {
+                const f = ocrData.extracted_fields || {};
+                ocrContainer.innerHTML = `
+                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Name:</strong> ${f["Name"] || 'Not detected'}</div>
+                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Passport No:</strong> ${f["Passport Number"] || 'Not detected'}</div>
+                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Nationality:</strong> ${f["Nationality"] || 'Not detected'}</div>
+                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>DOB:</strong> ${f["Date of Birth"] || 'Not detected'}</div>
+                    <div style="font-size: 0.95rem;"><strong>Expiry:</strong> ${f["Date of Expiry"] || 'Not detected'}</div>
+                `;
+            } else {
+                ocrContainer.innerHTML = `<p style="color:var(--danger)">Error: ${ocrData.error || 'OCR failed'}</p>`;
+            }
+        }
+
+
+        // =======================================================
+        // TAB 2: OCR ADMIN TESTING ONLY
+        // =======================================================
+        document.getElementById('run-admin-ocr-btn').addEventListener('click', async () => {
+            const docBlob = adminOcrSlot.getBlob();
+            if (!docBlob) {
+                alert('Please snap or upload a document photo to test OCR.');
+                return;
+            }
+
+            const btn = document.getElementById('run-admin-ocr-btn');
+            const spinner = document.getElementById('admin-ocr-spinner');
+            const resultsBox = document.getElementById('admin-ocr-results');
+
+            btn.style.display = 'none';
+            spinner.style.display = 'block';
+            resultsBox.style.display = 'none';
+
+            try {
+                const formData = new FormData();
+                formData.append('document', docBlob, 'document.jpg');
+                const uploadRes = await fetch('/upload', { method: 'POST', body: formData });
+                if (!uploadRes.ok) throw new Error('Upload failed');
+
+                const strictness = document.getElementById('admin-ocr-strict-slider').value;
+                const docType = document.getElementById('admin-ocr-type').value;
+
+                const ocrRes = await fetch(`/extract_text?type=${docType}&ocr_strictness=${strictness}`, { method: 'POST' });
+                const data = await ocrRes.json();
+
+                renderAdminOcr(data);
+                resultsBox.style.display = 'block';
+                resultsBox.scrollIntoView({ behavior: 'smooth' });
+
+            } catch (err) {
+                alert(`OCR Test Error: ${err.message}`);
+            } finally {
+                btn.style.display = 'block';
+                spinner.style.display = 'none';
+            }
+        });
+
+        function renderAdminOcr(data) {
+            const badge = document.getElementById('admin-ocr-badge');
+            const fieldsList = document.getElementById('admin-ocr-fields');
+            const rawPre = document.getElementById('admin-ocr-raw');
+
+            fieldsList.innerHTML = '';
+            rawPre.textContent = data.raw_text || 'No raw text extracted';
+
+            if (data.status === 'warning') {
+                badge.className = 'status-badge status-warning';
+                badge.textContent = 'Low Text';
+                fieldsList.innerHTML = `
+                    <li class="field-item" style="grid-column: 1 / -1; border-color: #f59e0b; background: rgba(245, 158, 11, 0.1);">
+                        <span class="field-label" style="color: #fbbf24;">Notice</span>
+                        <span class="field-value" style="color: white; font-size: 0.95rem;">${data.message}</span>
+                    </li>
+                `;
+                return;
+            }
+
+            if (data.status === 'error') {
+                badge.className = 'status-badge status-nomatch';
+                badge.textContent = 'Error';
+                fieldsList.innerHTML = `<li class="field-item" style="grid-column: 1 / -1; color: var(--danger);">${data.error}</li>`;
+                return;
+            }
+
+            badge.className = 'status-badge status-match';
+            badge.textContent = 'Extracted';
+
+            const fields = data.extracted_fields || {};
+            for (const [key, val] of Object.entries(fields)) {
+                const li = document.createElement('li');
+                li.className = 'field-item';
+                li.innerHTML = `
+                    <span class="field-label">${key}</span>
+                    <span class="field-value">${val || '<span style="color:var(--text-muted); font-weight:normal;">null</span>'}</span>
+                `;
+                fieldsList.appendChild(li);
+            }
+        }
+
+
+        // =======================================================
+        // TAB 3: FACE MATCH ADMIN TESTING ONLY
+        // =======================================================
+        document.getElementById('run-admin-face-btn').addEventListener('click', async () => {
+            const face1 = adminFace1Slot.getBlob();
+            const face2 = adminFace2Slot.getBlob();
+
+            if (!face1 || !face2) {
+                alert('Please provide both Face 1 and Face 2 images to run Face Match verification.');
+                return;
+            }
+
+            const btn = document.getElementById('run-admin-face-btn');
+            const spinner = document.getElementById('admin-face-spinner');
+            const resultsBox = document.getElementById('admin-face-results');
+
+            btn.style.display = 'none';
+            spinner.style.display = 'block';
+            resultsBox.style.display = 'none';
+
+            try {
+                const formData = new FormData();
+                formData.append('person', face1, 'person.jpg');
+                formData.append('document', face2, 'document.jpg');
+
+                const uploadRes = await fetch('/upload', { method: 'POST', body: formData });
+                if (!uploadRes.ok) throw new Error('Upload failed');
+
+                const strictness = document.getElementById('admin-face-strict-slider').value;
+                const model = document.getElementById('admin-face-model').value;
+                const detector = document.getElementById('admin-face-detector').value;
+
+                const verifyRes = await fetch(`/verify_photo?face_strictness=${strictness}&model_name=${model}&detector_backend=${detector}`, { method: 'POST' });
+                const data = await verifyRes.json();
+
+                renderAdminFace(data);
+                resultsBox.style.display = 'block';
+                resultsBox.scrollIntoView({ behavior: 'smooth' });
+
+            } catch (err) {
+                alert(`Face Verification Error: ${err.message}`);
+            } finally {
+                btn.style.display = 'block';
+                spinner.style.display = 'none';
+            }
+        });
+
+        function renderAdminFace(data) {
+            const badge = document.getElementById('admin-face-badge');
+            const container = document.getElementById('admin-face-details');
+
+            if (data.status === 'error' || (data.verification && data.verification.error)) {
+                badge.className = 'status-badge status-nomatch';
+                badge.textContent = 'Error';
+                container.innerHTML = `<p style="color:var(--danger)">Error: ${data.error || data.verification.error}</p>`;
+                return;
+            }
+
+            const v = data.verification;
+            badge.className = `status-badge ${v.is_match ? 'status-match' : 'status-nomatch'}`;
+            badge.textContent = v.is_match ? 'MATCH' : 'NO MATCH';
+
+            container.innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                    <div class="field-item">
+                        <span class="field-label">Verification Verdict</span>
+                        <span class="field-value" style="color: ${v.is_match ? 'var(--success)' : 'var(--danger)'};">
+                            ${v.is_match ? 'VERIFIED MATCH' : 'IMPOSTER / NO MATCH'}
+                        </span>
+                    </div>
+                    <div class="field-item">
+                        <span class="field-label">Trust Score</span>
+                        <span class="field-value">${v.trust_score ? v.trust_score.toFixed(1) : 0} / 100</span>
+                    </div>
+                    <div class="field-item">
+                        <span class="field-label">Distance / Threshold</span>
+                        <span class="field-value">${v.distance} (limit: ${v.threshold})</span>
+                    </div>
+                    <div class="field-item">
+                        <span class="field-label">Model Engine</span>
+                        <span class="field-value" style="color: #a78bfa;">${v.model || 'Facenet512'}</span>
+                    </div>
+                </div>
+
+                <details>
+                    <summary style="cursor:pointer; color:var(--text-muted); font-weight:600;">View Raw Verification JSON</summary>
+                    <pre style="margin-top:0.5rem;">${JSON.stringify(v, null, 2)}</pre>
+                </details>
+            `;
+        }
+
+        // Initialize on page load
+        switchTab('pipeline');
+    </script>
+</body>
+</html>

@@ -222,3 +222,22 @@ data/raw/*
 !data/raw/.gitkeep
 modules/tampering_detection/models/*
 !modules/tampering_detection/models/.gitkeep
+
+# Uploaded images — keep folder structure but not content
+data/uploads/*
+!data/uploads/.gitkeep
+data/uploads/person/*
+!data/uploads/person/.gitkeep
+data/uploads/document/*
+!data/uploads/document/.gitkeep
+
+# Auto-generated SSL certificates (regenerated on --ssl startup)
+data/certs/
+
+# Synthetic / test datasets (large, not for VCS)
+data/synthetic/*
+!data/synthetic/.gitkeep
+
+# Jupyter / notebook checkpoints
+notebooks/.ipynb_checkpoints/
+tests

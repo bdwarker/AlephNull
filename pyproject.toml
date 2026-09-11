@@ -7,3 +7,12 @@ name = "alephnull"
 version = "0.1.0"
 description = "Fraud detection pipeline scaffold"
 requires-python = ">=3.11"
+dependencies = [
+    "pytesseract",
+    "opencv-python",
+    "numpy",
+    "flask",
+    "flask-cors",
+    "deepface",
+    "werkzeug"
+]
