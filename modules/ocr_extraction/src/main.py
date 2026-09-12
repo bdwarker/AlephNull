@@ -107,48 +107,100 @@ class MRZParser:
             "Date of Expiry": None,
             "Gender": None
         }
+        raw_lines = {"line1": None, "line2": None}
+        check_digits = {
+            "passport_number_chk": None,
+            "dob_chk": None,
+            "expiry_chk": None,
+            "composite_chk": None
+        }
         found_mrz = False
         
         # 1. Look for MRZ Line 1: P<[Country][Surname]<<[Given Names]...
         for line in lines:
-            m1 = re.search(r'P[<CKE]?([A-Z]{3})([A-Z0-9<]{8,})', line)
+            # Matches P< followed by country code (3 chars) and name string
+            m1 = re.search(r'P[<A-Z0-9]?([A-Z<]{3})([A-Z0-9<]{10,})', line)
             if m1:
-                country = m1.group(1)
+                country = m1.group(1).replace('<', '')
                 name_str = m1.group(2)
-                parts = [re.sub(r'[^A-Z]', '', p) for p in re.split(r'[<CKS]{2,}', name_str)]
-                parts = [p for p in parts if len(p) >= 2]
-                if len(parts) >= 2:
-                    extracted["Name"] = f"{parts[0]}, {parts[1]}"
-                elif len(parts) == 1:
-                    extracted["Name"] = parts[0]
+                raw_lines["line1"] = line
+                
+                # Surnames and Given Names in ICAO 9303 are separated by '<<'
+                # OCR may sometimes see '<C' or 'C<' or '<<' for the delimiter
+                sep_match = re.search(r'(?:<{2,}|<[CK]|[CK]<)', name_str)
+                if sep_match:
+                    surname_raw = name_str[:sep_match.start()]
+                    given_raw = name_str[sep_match.end():]
                     
-                if country in ["IND", "USA", "GBR", "CAN", "AUS", "FRA", "DEU"]:
+                    surname = re.sub(r'[^A-Z]', '', surname_raw)
+                    # Given names may contain multiple names separated by '<'
+                    given_parts = [re.sub(r'[^A-Z]', '', p) for p in given_raw.split('<') if p]
+                    given = " ".join([p for p in given_parts if len(p) >= 1])
+                    
+                    if surname and given:
+                        extracted["Name"] = f"{surname}, {given}"
+                    elif surname:
+                        extracted["Name"] = surname
+                    elif given:
+                        extracted["Name"] = given
+                else:
+                    # Single name or fallback
+                    clean_name = re.sub(r'<+', ' ', name_str).strip()
+                    clean_name = re.sub(r'[^A-Z\s]', '', clean_name)
+                    if clean_name:
+                        extracted["Name"] = clean_name
+                    
+                if country:
                     extracted["Nationality"] = country
                 found_mrz = True
                 break
                 
-        # 2. Look for MRZ Line 2: [PassportNo]<[chk][Country][DOB(6)][chk][M/F][Expiry(6)]...
+        # 2. Look for MRZ Line 2: [PassportNo(9)][chk(1)][Country(3)][DOB(6)][chk(1)][M/F][Expiry(6)][chk(1)]...
         for line in lines:
-            m2 = re.search(r'([A-Z0-9]{8,9})[<CKE0-9]?(\d?)([A-Z]{3})(\d[0-9OIZSB]{5})[<CKE0-9]?(\d?)([MF<])(\d[0-9OIZSB]{5})', line)
+            m2 = re.search(
+                r'([A-Z0-9<]{8,9})'       # Passport number (8-9 chars)
+                r'([0-9OIZSB<])'          # Passport number check digit
+                r'([A-Z<]{3})'            # Nationality
+                r'([0-9OIZSB]{6})'        # DOB YYMMDD
+                r'([0-9OIZSB<])'          # DOB check digit
+                r'([MF<])'                # Sex
+                r'([0-9OIZSB]{6})'        # Expiry YYMMDD
+                r'([0-9OIZSB<])?',        # Expiry check digit (optional)
+                line
+            )
             if m2:
-                passport_no = m2.group(1)
-                country = m2.group(3)
+                raw_lines["line2"] = line
+                passport_no_raw = m2.group(1).replace('<', '')
+                p_chk_raw = m2.group(2)
+                country = m2.group(3).replace('<', '')
                 dob_raw = m2.group(4)
+                dob_chk_raw = m2.group(5)
                 gender = m2.group(6)
                 exp_raw = m2.group(7)
+                exp_chk_raw = m2.group(8) or ""
                 
                 # Digit confusions error correction
-                trans = str.maketrans('OIZSB', '01258')
+                trans = str.maketrans('OIZSB<', '012580')
                 dob_clean = dob_raw.translate(trans)
                 exp_clean = exp_raw.translate(trans)
                 
-                extracted["Passport Number"] = passport_no
-                if not extracted["Nationality"]:
+                check_digits["passport_number_chk"] = p_chk_raw.translate(trans)
+                check_digits["dob_chk"] = dob_chk_raw.translate(trans)
+                if exp_chk_raw:
+                    check_digits["expiry_chk"] = exp_chk_raw.translate(trans)
+                
+                # Extract composite check digit from line end if present
+                trailing_digits = re.findall(r'\d+', line[-5:])
+                if trailing_digits:
+                    check_digits["composite_chk"] = trailing_digits[-1][-1]
+                
+                extracted["Passport Number"] = passport_no_raw
+                if country and not extracted["Nationality"]:
                     extracted["Nationality"] = country
                     
                 # Format DOB
                 yy, mm, dd = dob_clean[:2], dob_clean[2:4], dob_clean[4:6]
-                current_year_short = datetime.now().year % 100  # gives 25 for 2026
+                current_year_short = datetime.now().year % 100
                 year = f"19{yy}" if int(yy) > current_year_short else f"20{yy}"
                 extracted["Date of Birth"] = f"{year}-{mm}-{dd}"
                 
@@ -165,18 +217,19 @@ class MRZParser:
             for line in lines:
                 m2_alt = re.search(r'([A-Z]{3})([A-Z0-9]{6,7})([MF<])([A-Z0-9]{6,7})', line)
                 if m2_alt:
-                    country = m2_alt.group(1)
+                    raw_lines["line2"] = line
+                    country = m2_alt.group(1).replace('<', '')
                     dob_raw = m2_alt.group(2)[:6]
                     gender = m2_alt.group(3)
                     exp_raw = m2_alt.group(4)[:6]
-                    trans = str.maketrans('OTIZSBG', '0712586')
+                    trans = str.maketrans('OTIZSBG<', '07125860')
                     dob_clean = dob_raw.translate(trans)
                     exp_clean = exp_raw.translate(trans)
-                    if not extracted["Nationality"]:
+                    if country and not extracted["Nationality"]:
                         extracted["Nationality"] = country
                     if not extracted["Date of Birth"] and dob_clean.isdigit():
                         yy, mm, dd = dob_clean[:2], dob_clean[2:4], dob_clean[4:6]
-                        current_year_short = datetime.now().year % 100  # gives 25 for 2026
+                        current_year_short = datetime.now().year % 100
                         year = f"19{yy}" if int(yy) > current_year_short else f"20{yy}"
                         extracted["Date of Birth"] = f"{year}-{mm}-{dd}"
                     if not extracted["Date of Expiry"] and exp_clean.isdigit():
@@ -189,7 +242,9 @@ class MRZParser:
                 
         return {
             "valid": found_mrz,
-            "fields": extracted
+            "fields": extracted,
+            "raw_lines": raw_lines,
+            "check_digits": check_digits
         }
 
 
@@ -213,7 +268,7 @@ class DocumentOCR:
 
     def process_document(
         self, 
-        image_path: Union[str, Path], 
+        image_path: Union[str, Path, np.ndarray], 
         doc_type: str = "passport", 
         strictness: int = 50,
         **kwargs
@@ -235,7 +290,10 @@ class DocumentOCR:
         norm_type = self.normalize_doc_type(doc_type)
 
         try:
-            image = cv2.imread(str(image_path))
+            if isinstance(image_path, np.ndarray):
+                image = image_path
+            else:
+                image = cv2.imread(str(image_path))
             if image is None:
                 raise ValueError(f"Could not read image from {image_path}")
 

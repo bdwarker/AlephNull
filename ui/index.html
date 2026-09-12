@@ -867,8 +867,109 @@
             to { transform: rotate(360deg); }
         }
 
+        /* Consolidated Score & Multi-Pillar Styling */
+        .consolidated-card {
+            background: linear-gradient(135deg, rgba(26, 30, 41, 0.98), rgba(16, 19, 26, 0.98));
+            border-radius: var(--radius-lg);
+            padding: 1.75rem;
+            position: relative;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+            margin-bottom: 2rem;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .consolidated-hero {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 2rem;
+            align-items: center;
+            background: rgba(11, 15, 25, 0.65);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .consolidated-hero-score {
+            text-align: center;
+            padding-right: 2rem;
+            border-right: 1px solid var(--border-color);
+            min-width: 180px;
+        }
+
+        .pillar-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+
+        .pillar-card {
+            background: rgba(11, 15, 25, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 1.15rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .pillar-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--border-hover);
+        }
+
+        .pillar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .pillar-weight-badge {
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 0.2rem 0.55rem;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.08);
+            color: #cbd5e1;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .pillar-progress-track {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .pillar-progress-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
         /* Responsive Mobile Styles */
         @media (max-width: 640px) {
+            .consolidated-hero {
+                grid-template-columns: 1fr;
+                gap: 1.25rem;
+                text-align: center;
+            }
+            .consolidated-hero-score {
+                padding-right: 0;
+                border-right: none;
+                border-bottom: 1px solid var(--border-color);
+                padding-bottom: 1.25rem;
+            }
+            .pillar-grid {
+                grid-template-columns: 1fr;
+            }
             .nav-tabs {
                 width: 96%;
                 border-radius: 12px;
@@ -1076,6 +1177,9 @@
                     <span class="status-badge" id="pipeline-overall-badge">Pending</span>
                 </div>
 
+                <!-- Consolidated Score Banner & Weighted Category Breakdown -->
+                <div id="pipeline-consolidated-container"></div>
+
                 <div class="card-grid" style="margin-bottom: 1.5rem;">
                     <!-- Face match summary -->
                     <div style="background: rgba(11,15,25,0.6); padding: 1.25rem; border-radius: 12px; border: 1px solid var(--border-color);">
@@ -1186,6 +1290,9 @@
                 <!-- Identity Fields Grid -->
                 <h3 style="font-size: 0.95rem; color: #60a5fa; margin-bottom: 0.75rem; font-weight: 700;">📋 Extracted Document Fields</h3>
                 <ul class="field-list" id="admin-ocr-fields"></ul>
+
+                <!-- Document Validation & Security Compliance (Module 2) -->
+                <div id="admin-ocr-validation-container" style="margin-top: 1rem;"></div>
 
                 <!-- Raw OCR Output & Extraction Passes -->
                 <div id="admin-ocr-raw-container" style="margin-top: 1.5rem;"></div>
@@ -2097,8 +2204,26 @@
                 const faceData = await faceRes.json();
                 const ocrData = await ocrRes.json();
 
-                // Render Results
-                renderPipelineResults(faceData, ocrData);
+                // 3. Consolidate Scores across Modules via Risk Engine
+                let consolidated = null;
+                try {
+                    const consRes = await fetch('/consolidate_score', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ face_data: faceData, doc_data: ocrData })
+                    });
+                    if (consRes.ok) {
+                        const consJson = await consRes.json();
+                        if (consJson.status === 'success' && consJson.consolidated) {
+                            consolidated = consJson.consolidated;
+                        }
+                    }
+                } catch (cErr) {
+                    console.warn('Consolidate score API request error (using local fallback):', cErr);
+                }
+
+                // Render Pipeline Results
+                renderPipelineResults(faceData, ocrData, consolidated);
                 resultsBox.style.display = 'block';
                 resultsBox.scrollIntoView({ behavior: 'smooth' });
 
@@ -2110,32 +2235,284 @@
             }
         });
 
-        function renderPipelineResults(faceData, ocrData) {
+        function renderPipelineResults(faceData, ocrData, consolidated) {
             const overallBadge = document.getElementById('pipeline-overall-badge');
+            const consContainer = document.getElementById('pipeline-consolidated-container');
             const faceContainer = document.getElementById('pipe-face-res');
             const ocrContainer = document.getElementById('pipe-ocr-res');
 
-            // Face Result
-            if (faceData.status === 'success' && faceData.verification) {
-                const v = faceData.verification;
-                const matchClass = v.is_match ? 'status-match' : 'status-nomatch';
-                faceContainer.innerHTML = `
-                    <div style="font-size: 1.4rem; font-weight: 800; color: ${v.is_match ? 'var(--success)' : 'var(--danger)'}; margin-bottom: 0.5rem;">
-                        ${v.is_match ? '✅ VERIFIED MATCH' : '❌ NO MATCH'}
-                    </div>
-                    <div style="font-size: 0.95rem; margin-bottom: 0.25rem;"><strong>Trust Score:</strong> ${v.trust_score ? v.trust_score.toFixed(1) : 0}/100</div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Distance: ${v.distance} (Limit: ${v.threshold})</div>
-                    <div style="font-size: 0.8rem; color: #a78bfa;">Engine: ${v.model || 'Facenet512'} (${v.detector_backend || 'opencv'})</div>
-                `;
-                overallBadge.className = `status-badge ${matchClass}`;
-                overallBadge.textContent = v.is_match ? 'Verified' : 'Flagged';
-            } else {
-                faceContainer.innerHTML = `<p style="color:var(--danger)">Error: ${faceData.error || (faceData.verification && faceData.verification.error) || 'Face verification failed'}</p>`;
-                overallBadge.className = 'status-badge status-nomatch';
-                overallBadge.textContent = 'Error';
+            const vFace = (faceData.status === 'success' && faceData.verification) ? faceData.verification : null;
+            const faceScore = vFace ? (vFace.trust_score || 0) : 0;
+            const isFaceMatch = vFace ? !!vFace.is_match : false;
+
+            const vDoc = ocrData.validation || null;
+            const docScore = vDoc ? (vDoc.score || 0) : 0;
+            const isDocValid = vDoc ? !!vDoc.valid : false;
+            const anomalies = vDoc ? (vDoc.anomalies || []) : [];
+            const checks = vDoc ? (vDoc.checks || []) : [];
+
+            // Compute client-side consolidated score fallback if server call is unavailable
+            if (!consolidated) {
+                const secChecks = checks.filter(c => /mrz|checksum|verhoeff|cross_check/i.test(c.field || ''));
+                let secScore = docScore;
+                if (secChecks.length > 0) {
+                    const passed = secChecks.filter(c => c.status === 'CORRECT').length;
+                    secScore = (passed / secChecks.length) * 100.0;
+                }
+                const stdScore = docScore;
+                const wFace = 0.45, wSec = 0.35, wStd = 0.20;
+                const rawScore = (faceScore * wFace) + (secScore * wSec) + (stdScore * wStd);
+
+                const criticalFlags = [];
+                let hasCrit = false;
+                if (!isFaceMatch) {
+                    criticalFlags.push('BIOMETRIC_MISMATCH: Live presenter does not match document photo');
+                    hasCrit = true;
+                }
+                if (!isDocValid) {
+                    criticalFlags.push(`DOCUMENT_INVALID: ${(vDoc && vDoc.decision && vDoc.decision.summary) || 'Failed format or security validation'}`);
+                    hasCrit = true;
+                }
+                if (anomalies.some(a => String(a).includes('EXPIRED_DOCUMENT'))) {
+                    criticalFlags.push('EXPIRED_TRAVEL_DOCUMENT: Document is expired and invalid for border crossing');
+                    hasCrit = true;
+                }
+                if (anomalies.some(a => String(a).includes('CHECKSUM') || String(a).includes('TAMPERING'))) {
+                    criticalFlags.push('SECURITY_INTEGRITY_COMPROMISED: Checksum or visual/MRZ mismatch detected');
+                    hasCrit = true;
+                }
+
+                let finalScore = rawScore;
+                if (hasCrit) finalScore = Math.min(finalScore, 48.0);
+                finalScore = Math.round(Math.max(0, Math.min(100, finalScore)) * 10) / 10;
+
+                let verdict = 'REJECT', riskLevel = 'HIGH';
+                let recommendation = `High security fraud risk detected (${criticalFlags[0] || 'Risk threshold breached'}). Immediate physical inspection / rejection required.`;
+                if (finalScore >= 82.0 && !hasCrit) {
+                    verdict = 'CLEARANCE';
+                    riskLevel = 'LOW';
+                    recommendation = 'Identity and document verified with high confidence. Proceed with automated clearance.';
+                } else if (finalScore >= 60.0 && !hasCrit) {
+                    verdict = 'SECONDARY_INSPECTION';
+                    riskLevel = 'MEDIUM';
+                    recommendation = 'Borderline confidence or non-critical document warning. Route passenger to secondary inspection officer.';
+                }
+
+                consolidated = {
+                    consolidated_score: finalScore,
+                    raw_weighted_score: Math.round(rawScore * 10) / 10,
+                    verdict: verdict,
+                    risk_level: riskLevel,
+                    recommendation: recommendation,
+                    is_cleared: verdict === 'CLEARANCE',
+                    critical_flags: criticalFlags,
+                    category_breakdown: [
+                        {
+                            category: "Biometric Face Match",
+                            score: Math.round(faceScore * 10) / 10,
+                            weight: 45.0,
+                            contribution: Math.round(faceScore * 0.45 * 10) / 10,
+                            passed: isFaceMatch,
+                            status: isFaceMatch ? "PASS" : "FAIL",
+                            rationale: "Physical person-to-document binding via 512D FaceNet embeddings. Ensures the presenter is the legitimate holder."
+                        },
+                        {
+                            category: "Document Security & Checksums",
+                            score: Math.round(secScore * 10) / 10,
+                            weight: 35.0,
+                            contribution: Math.round(secScore * 0.35 * 10) / 10,
+                            passed: secScore >= 70.0 && !anomalies.some(a => String(a).includes('CHECKSUM')),
+                            status: (secScore >= 70.0 && !anomalies.some(a => String(a).includes('CHECKSUM'))) ? "PASS" : "FAIL",
+                            rationale: "ICAO 9303 / Verhoeff mathematical check-digit verification. High-confidence filter for altered numbers and tampered MRZs."
+                        },
+                        {
+                            category: "Document Standards & Coherence",
+                            score: Math.round(stdScore * 10) / 10,
+                            weight: 20.0,
+                            contribution: Math.round(stdScore * 0.20 * 10) / 10,
+                            passed: isDocValid,
+                            status: isDocValid ? "PASS" : "FAIL",
+                            rationale: "Format compliance, current expiration status, legal age constraints, and cross-field temporal logic."
+                        }
+                    ],
+                    individual_scores: {
+                        face_verification: { score: Math.round(faceScore * 10) / 10, is_match: isFaceMatch },
+                        doc_validation: { score: Math.round(docScore * 10) / 10, valid: isDocValid }
+                    }
+                };
             }
 
-            // OCR Result
+            // Status Styling Tokens
+            const isClearance = consolidated.verdict === 'CLEARANCE';
+            const isSecondary = consolidated.verdict === 'SECONDARY_INSPECTION';
+            const verdictColor = isClearance ? 'var(--success)' : (isSecondary ? 'var(--warning)' : 'var(--danger)');
+            const verdictGlow = isClearance ? 'rgba(16, 185, 129, 0.22)' : (isSecondary ? 'rgba(245, 158, 11, 0.22)' : 'rgba(239, 68, 68, 0.22)');
+            const verdictBg = isClearance ? 'rgba(16, 185, 129, 0.15)' : (isSecondary ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)');
+            const verdictIcon = isClearance ? '✅' : (isSecondary ? '⚠️' : '⛔');
+            const verdictText = isClearance ? 'CLEARANCE APPROVED' : (isSecondary ? 'SECONDARY INSPECTION' : 'REJECT / FRAUD ALERT');
+
+            // 1. Update Overall Header Status Badge
+            overallBadge.className = isClearance ? 'status-badge status-match' : (isSecondary ? 'status-badge status-warning' : 'status-badge status-nomatch');
+            overallBadge.textContent = verdictText;
+
+            // 2. Render Consolidated Score Dashboard
+            const breakdown = consolidated.category_breakdown || [];
+            let pillarsHtml = '';
+            breakdown.forEach((pillar) => {
+                const pPass = pillar.passed || pillar.status === 'PASS';
+                const pColor = pPass ? 'var(--success)' : 'var(--danger)';
+                const pIcon = pillar.category.includes('Face') ? '👤' : (pillar.category.includes('Security') ? '🔒' : '📋');
+                pillarsHtml += `
+                    <div class="pillar-card" style="border-left: 4px solid ${pColor};">
+                        <div class="pillar-header">
+                            <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                <span>${pIcon}</span>
+                                <strong style="font-size: 0.88rem; color: var(--text-main);">${pillar.category}</strong>
+                            </div>
+                            <span class="pillar-weight-badge">${pillar.weight}% Weight</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                            <span style="font-size: 1.4rem; font-weight: 800; color: ${pColor}; font-family: 'JetBrains Mono', monospace;">
+                                ${pillar.score.toFixed(1)} <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: normal;">/ 100</span>
+                            </span>
+                            <span style="font-size: 0.82rem; font-weight: 700; color: #38bdf8;">
+                                Contribution: +${pillar.contribution.toFixed(1)} pts
+                            </span>
+                        </div>
+                        <div class="pillar-progress-track">
+                            <div class="pillar-progress-fill" style="width: ${Math.min(100, Math.max(0, pillar.score))}%; background: ${pColor};"></div>
+                        </div>
+                        <div style="font-size: 0.76rem; color: var(--text-muted); line-height: 1.35; margin-top: 0.2rem;">
+                            <strong>Why this weight:</strong> ${pillar.rationale}
+                        </div>
+                    </div>
+                `;
+            });
+
+            let criticalAlertHtml = '';
+            if (consolidated.critical_flags && consolidated.critical_flags.length > 0) {
+                criticalAlertHtml = `
+                    <div style="margin-top: 1rem; padding: 0.9rem 1.1rem; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.86rem; font-weight: 800; color: #f87171; margin-bottom: 0.35rem;">
+                            <span>🚨 Security Gatekeeper Enforced:</span>
+                            <span style="font-size: 0.78rem; background: rgba(239,68,68,0.25); padding: 0.15rem 0.5rem; border-radius: 4px;">Score Capped at ${consolidated.consolidated_score}/100</span>
+                        </div>
+                        <div style="font-size: 0.82rem; color: #fca5a5; line-height: 1.4;">
+                            Automated clearance strictly blocked due to critical border security anomaly:
+                        </div>
+                        <ul style="margin: 0.4rem 0 0 1.2rem; font-size: 0.82rem; color: #fee2e2;">
+                            ${consolidated.critical_flags.map(flag => `<li><strong>${flag}</strong></li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            consContainer.innerHTML = `
+                <div class="consolidated-card" style="border-color: ${verdictColor}; box-shadow: 0 12px 36px ${verdictGlow};">
+                    <div style="position: absolute; top: 0; left: 0; right: 0; height: 4px; background: ${verdictColor};"></div>
+                    
+                    <!-- Header -->
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.3rem;">
+                                <span style="font-size: 1.35rem;">🛡️</span>
+                                <h3 style="font-size: 1.25rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.02em;">
+                                    Consolidated Border Clearance Score
+                                </h3>
+                            </div>
+                            <p style="font-size: 0.84rem; color: var(--text-muted);">
+                                Multi-Pillar Risk Engine • Weighted for Border Screening (PS26188 / Sashastra Seema Bal)
+                            </p>
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 0.45rem; padding: 0.45rem 1rem; border-radius: 999px; background: ${verdictBg}; border: 1px solid ${verdictColor}; color: ${verdictColor}; font-weight: 800; font-size: 0.88rem; letter-spacing: 0.04em;">
+                                <span>${verdictIcon}</span>
+                                <span>${verdictText}</span>
+                            </div>
+                            <span style="padding: 0.45rem 0.8rem; border-radius: 6px; background: rgba(255,255,255,0.06); border: 1px solid var(--border-color); font-size: 0.8rem; font-weight: 700; color: var(--text-muted);">
+                                RISK: <strong style="color: ${verdictColor};">${consolidated.risk_level}</strong>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Hero Score & Officer Directive -->
+                    <div class="consolidated-hero">
+                        <div class="consolidated-hero-score">
+                            <div style="font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); font-weight: 700; margin-bottom: 0.25rem;">
+                                Consolidated Score
+                            </div>
+                            <div style="font-size: 3.2rem; font-weight: 900; line-height: 1; color: ${verdictColor}; font-family: 'JetBrains Mono', monospace;">
+                                ${consolidated.consolidated_score.toFixed(1)}
+                            </div>
+                            <div style="font-size: 0.95rem; color: var(--text-muted); font-weight: 600; margin-top: 0.2rem;">
+                                out of 100
+                            </div>
+                            <div style="margin-top: 0.75rem; width: 100%; height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden;">
+                                <div style="width: ${Math.min(100, Math.max(0, consolidated.consolidated_score))}%; height: 100%; background: ${verdictColor}; border-radius: 3px;"></div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--text-muted); margin-top: 0.4rem;">
+                                <span>0 Reject</span>
+                                <span>60 Sec</span>
+                                <span>82 Clear</span>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            <div style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: ${verdictColor};">
+                                <span>👮 Actionable Officer Directive:</span>
+                            </div>
+                            <div style="font-size: 1.05rem; font-weight: 600; color: var(--text-main); line-height: 1.45;">
+                                ${consolidated.recommendation}
+                            </div>
+                            ${criticalAlertHtml}
+                        </div>
+                    </div>
+
+                    <!-- 3-Pillar Weighted Qualification Breakdown -->
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+                            <h4 style="font-size: 0.88rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;">
+                                ⚖️ Weighted Qualification Categories (Operational Importance vs AI Accuracy)
+                            </h4>
+                            <span style="font-size: 0.76rem; color: var(--text-muted);">
+                                Normalized Weights Total: 100%
+                            </span>
+                        </div>
+                        <div class="pillar-grid">
+                            ${pillarsHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // 3. Render Module 4 Individual Sub-Card (Face Match)
+            if (vFace) {
+                const matchClass = vFace.is_match ? 'status-match' : 'status-nomatch';
+                faceContainer.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <span style="font-size: 1.3rem; font-weight: 800; color: ${vFace.is_match ? 'var(--success)' : 'var(--danger)'};">
+                            ${vFace.is_match ? '✅ VERIFIED MATCH' : '❌ NO MATCH'}
+                        </span>
+                        <span style="font-size: 1.15rem; font-weight: 800; color: ${vFace.is_match ? 'var(--success)' : 'var(--danger)'}; font-family: 'JetBrains Mono', monospace;">
+                            ${faceScore.toFixed(1)} / 100
+                        </span>
+                    </div>
+                    <div style="font-size: 0.9rem; margin-bottom: 0.35rem;">
+                        <strong>Individual Face Trust Score:</strong> ${faceScore.toFixed(1)}/100
+                    </div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.35rem;">
+                        Biometric Distance: <span style="color: #cbd5e1; font-family: 'JetBrains Mono', monospace;">${vFace.distance}</span> (Threshold Limit: ${vFace.threshold})
+                    </div>
+                    <div style="font-size: 0.8rem; color: #a78bfa;">
+                        Model: ${vFace.model || 'Facenet512'} (${vFace.detector_backend || 'opencv'})
+                    </div>
+                `;
+            } else {
+                faceContainer.innerHTML = `<p style="color:var(--danger)">Error: ${faceData.error || (faceData.verification && faceData.verification.error) || 'Face verification failed'}</p>`;
+            }
+
+            // 4. Render Module 1 & 2 Individual Sub-Card (OCR & Validation)
             if (ocrData.status === 'warning') {
                 ocrContainer.innerHTML = `
                     <div style="color: #fbbf24; font-size: 0.9rem; margin-bottom: 0.5rem;">⚠️ ${ocrData.message}</div>
@@ -2146,17 +2523,47 @@
                 for (const [k, v] of Object.entries(f)) {
                     if (k === 'Document Type') continue;
                     fieldHtml += `
-                        <div style="font-size: 0.92rem; margin-bottom: 0.35rem; display: flex; justify-content: space-between; border-bottom: 1px dashed rgba(255,255,255,0.08); padding-bottom: 0.25rem;">
+                        <div style="font-size: 0.88rem; margin-bottom: 0.3rem; display: flex; justify-content: space-between; border-bottom: 1px dashed rgba(255,255,255,0.08); padding-bottom: 0.2rem;">
                             <span style="color: var(--text-muted); font-weight: 600;">${k}:</span>
                             <span style="color: ${v ? '#60a5fa' : '#64748b'}; font-weight: 600;">${v || 'Not detected'}</span>
                         </div>
                     `;
                 }
+
+                let valHtml = '';
+                if (ocrData.validation) {
+                    const val = ocrData.validation;
+                    const vColor = val.valid ? 'var(--success)' : 'var(--danger)';
+                    const vVerdict = val.decision ? val.decision.verdict : (val.valid ? 'PASSED' : 'FLAGGED');
+                    valHtml = `
+                        <div style="margin-top: 0.75rem; padding: 0.75rem 0.9rem; background: rgba(0,0,0,0.35); border-radius: 8px; border-left: 4px solid ${vColor};">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                                <strong style="font-size: 0.88rem; color: var(--text-main);">🛡️ Module 2 Document Validation:</strong>
+                                <span style="font-size: 0.95rem; font-weight: 800; color: ${vColor}; font-family: 'JetBrains Mono', monospace;">
+                                    ${val.score}/100 (${vVerdict})
+                                </span>
+                            </div>
+                            <div style="color: var(--text-muted); font-size: 0.8rem; line-height: 1.4;">
+                                ${val.decision ? val.decision.summary : ''}
+                            </div>
+                            ${(val.checks_summary) ? `
+                                <div style="font-size: 0.78rem; color: #38bdf8; margin-top: 0.3rem; font-weight: 600;">
+                                    Rules Passed: ${val.checks_summary.passed}/${val.checks_summary.total}
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                }
+
                 ocrContainer.innerHTML = `
-                    <div style="margin-bottom: 0.6rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
                         <span class="tag-pill" style="font-size: 0.75rem;">${f["Document Type"] || (ocrData.document_type ? ocrData.document_type.replace('_', ' ').toUpperCase() : 'Document')}</span>
+                        <span style="font-size: 1.05rem; font-weight: 800; color: ${isDocValid ? 'var(--success)' : 'var(--danger)'}; font-family: 'JetBrains Mono', monospace;">
+                            ${docScore.toFixed(1)} / 100
+                        </span>
                     </div>
                     ${fieldHtml}
+                    ${valHtml}
                 `;
             } else {
                 ocrContainer.innerHTML = `<p style="color:var(--danger)">Error: ${ocrData.error || 'OCR failed'}</p>`;
@@ -2291,6 +2698,91 @@
                     <span class="field-value">${val || '<span style="color:var(--text-muted); font-weight:normal;">Not detected</span>'}</span>
                 `;
                 fieldsList.appendChild(li);
+            }
+
+            // 2.5 Module 2 Document Validation Card
+            const valContainer = document.getElementById('admin-ocr-validation-container');
+            if (valContainer) valContainer.innerHTML = '';
+            if (data.validation && valContainer) {
+                const v = data.validation;
+                const isPass = v.valid && v.status === 'PASSED';
+                const isWarn = v.status === 'FLAGGED';
+                const statusColor = isPass ? 'var(--success)' : isWarn ? 'var(--warning)' : 'var(--danger)';
+                const badgeBg = isPass ? 'rgba(16, 185, 129, 0.15)' : isWarn ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)';
+
+                let checksHtml = '';
+                (v.checks || []).forEach(c => {
+                    const ok = c.status === 'CORRECT';
+                    const warn = c.status === 'WARNING';
+                    const icon = ok ? '✅' : warn ? '⚠️' : '❌';
+                    checksHtml += `
+                        <div style="font-size: 0.84rem; padding: 0.4rem 0.6rem; background: rgba(0,0,0,0.25); border-radius: 6px; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+                            <span style="display: flex; gap: 0.4rem; align-items: flex-start;">
+                                <span>${icon}</span>
+                                <span><strong>${c.field}</strong>: ${c.reason}</span>
+                            </span>
+                            <span style="font-size: 0.72rem; color: ${ok ? 'var(--success)' : warn ? 'var(--warning)' : 'var(--danger)'}; font-weight: 700; white-space: nowrap;">${c.status}</span>
+                        </div>
+                    `;
+                });
+
+                let flagsHtml = '';
+                if (v.flags && v.flags.length > 0) {
+                    flagsHtml = `
+                        <div style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px;">
+                            <div style="font-size: 0.82rem; font-weight: 700; color: #f87171; margin-bottom: 0.35rem;">🚩 Active Security Flags:</div>
+                            ${v.flags.map(f => `<div style="font-size: 0.82rem; color: #fca5a5;">• ${f}</div>`).join('')}
+                        </div>
+                    `;
+                }
+
+                let crossHtml = '';
+                if (v.cross_checks && v.cross_checks.length > 0) {
+                    crossHtml = `
+                        <div style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px;">
+                            <div style="font-size: 0.82rem; font-weight: 700; color: #38bdf8; margin-bottom: 0.35rem;">🔍 Visual vs MRZ Cross-Check:</div>
+                            <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                            ${v.cross_checks.map(cc => `
+                                <div style="font-size: 0.82rem; display: flex; justify-content: space-between;">
+                                    <span>${cc.check}: ${cc.visual_value} vs ${cc.mrz_value}</span>
+                                    <span style="font-weight: 700; color: ${cc.match ? 'var(--success)' : 'var(--danger)'};">${cc.match ? 'MATCH' : 'MISMATCH'}</span>
+                                </div>
+                            `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                valContainer.innerHTML = `
+                    <div style="background: rgba(11, 15, 25, 0.7); border: 1px solid ${statusColor}; border-radius: 12px; padding: 1.25rem; margin-bottom: 1.25rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span style="font-size: 1.1rem;">🛡️</span>
+                                <h4 style="font-size: 1rem; color: var(--text-main); font-weight: 800;">Document Validation (Module 2)</h4>
+                            </div>
+                            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                <span style="background: ${badgeBg}; color: ${statusColor}; border: 1px solid ${statusColor}; padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: 800; font-size: 0.78rem;">
+                                    ${v.decision ? v.decision.verdict : v.status}
+                                </span>
+                                <span style="font-size: 1.1rem; font-weight: 800; color: ${statusColor};">
+                                    ${v.score}/100
+                                </span>
+                            </div>
+                        </div>
+                        <p style="font-size: 0.88rem; color: var(--text-muted); margin-bottom: 0.75rem;">${v.decision ? v.decision.summary : ''}</p>
+                        
+                        <details open style="margin-top: 0.5rem;">
+                            <summary style="cursor: pointer; color: #60a5fa; font-size: 0.85rem; font-weight: 700; margin-bottom: 0.5rem;">
+                                Rule Verification Breakdown (${v.checks_summary ? v.checks_summary.passed : 0}/${v.checks_summary ? v.checks_summary.total : 0} passed)
+                            </summary>
+                            <div style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem;">
+                                ${checksHtml}
+                            </div>
+                        </details>
+                        ${flagsHtml}
+                        ${crossHtml}
+                    </div>
+                `;
             }
 
             // 3. Raw OCR Output & Multi-Pass breakdown

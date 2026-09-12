@@ -33,6 +33,20 @@ except ImportError as e:
     DocumentOCR = None
     print(f"Warning: Could not import DocumentOCR: {e}")
 
+# Import DocumentValidator from modules
+try:
+    from modules.doc_validation.src.main import DocumentValidator
+except ImportError as e:
+    DocumentValidator = None
+    print(f"Warning: Could not import DocumentValidator: {e}")
+
+# Import Risk Engine scorer
+try:
+    from risk_engine.src.scorer import consolidate_pipeline_scores
+except ImportError as e:
+    consolidate_pipeline_scores = None
+    print(f"Warning: Could not import consolidate_pipeline_scores: {e}")
+
 app = Flask(__name__, static_folder=str(PROJECT_ROOT / "ui"), static_url_path="")
 CORS(app)
 
@@ -48,11 +62,13 @@ for d in UPLOAD_DIRS.values():
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp", "tiff"}
 
-# Cache for the most recently uploaded images
+# Cache for the most recently uploaded images and OCR results
 latest_uploads = {
     "person": None,
     "document": None
 }
+latest_ocr_result = None
+latest_face_result = None
 
 
 def is_allowed_file(filename: str) -> bool:
@@ -92,7 +108,15 @@ def health_check():
         "endpoints": {
             "/upload": "POST (accepts 'file' with quantifier 'document' or 'person')",
             "/verify_photo": "POST (compares face in person photo with document photo)",
-            "/extract_text": "POST (runs OCR on document photo)"
+            "/extract_text": "POST (runs OCR on document photo)",
+            "/validate_document": "POST (runs format and standard validation on document data)",
+            "/consolidate_score": "POST (combines face and doc scores with transparent weights)"
+        },
+        "modules": {
+            "face_verification": bool(FaceVerification),
+            "ocr_extraction": bool(DocumentOCR),
+            "doc_validation": bool(DocumentValidator),
+            "risk_engine": bool(consolidate_pipeline_scores)
         },
         "latest_uploads": {
             "person": bool(latest_uploads["person"]),
@@ -262,6 +286,12 @@ def verify_photo():
         )
         result = verifier.verify_identity(person_img_path, doc_img_path, strictness=face_strictness)
 
+        global latest_face_result
+        latest_face_result = {
+            "status": "success",
+            "verification": result
+        }
+
         return jsonify({
             "status": "success",
             "verification": result,
@@ -342,14 +372,119 @@ def extract_text():
     ocr_strictness = int(ocr_strictness) if ocr_strictness is not None else 50
 
     try:
+        global latest_ocr_result
         ocr = DocumentOCR()
         result = ocr.process_document(doc_img_path, doc_type=doc_type, strictness=ocr_strictness)
 
         if result.get("status") == "error":
             return jsonify(result), 500
 
+        # Auto-validate with Module 2 if available
+        if DocumentValidator is not None:
+            try:
+                validator = DocumentValidator()
+                result["validation"] = validator.validate_document(result)
+            except Exception as val_err:
+                result["validation_warning"] = str(val_err)
+
+        latest_ocr_result = result
         return jsonify(result), 200
 
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+
+@app.route("/validate_document", methods=["POST", "GET"])
+def validate_doc_endpoint():
+    """
+    Validates document data against official formatting and standards (Module 2).
+    Accepts:
+    - JSON payload: {"extracted_fields": {...}, "document_type": "passport", "mrz_parsed": {...}}
+    - Or flat JSON: {"document_type": "passport", "name": "...", "passport_number": "...", ...}
+    - Or falls back to the most recently generated OCR result from /extract_text.
+    """
+    if DocumentValidator is None:
+        return jsonify({
+            "error": "DocumentValidator module is not available."
+        }), 500
+
+    data = None
+    doc_type = request.args.get("doc_type") or request.args.get("type")
+
+    # 1. Check JSON body
+    if request.is_json:
+        data = request.get_json(silent=True)
+
+    # 2. Check Form Data
+    if not data and request.form:
+        data = request.form.to_dict()
+
+    # 3. Fallback to latest OCR result
+    if not data:
+        if latest_ocr_result is not None:
+            data = latest_ocr_result
+        else:
+            return jsonify({
+                "error": "No document data provided to validate.",
+                "hint": "Run /extract_text first, or pass JSON data containing document fields."
+            }), 400
+
+    try:
+        validator = DocumentValidator()
+        result = validator.validate_document(data, doc_type=doc_type)
+        return jsonify({
+            "status": "success",
+            "validation": result
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+
+@app.route("/consolidate_score", methods=["POST", "GET"])
+def consolidate_score_endpoint():
+    """
+    Combines Module 4 (Face Verification) and Module 2 (Document Validation) scores
+    using transparent category weights (Biometric Face 45%, Document Security 35%, Standards 20%).
+    
+    Accepts:
+    - JSON payload: {"face_data": {...}, "doc_data": {...}, "weights": {...}}
+    - Or falls back to the most recently generated verification results.
+    """
+    if consolidate_pipeline_scores is None:
+        return jsonify({
+            "error": "Consolidated risk scoring engine is not available."
+        }), 500
+
+    payload = request.get_json(silent=True) or {}
+    face_data = payload.get("face_data") or payload.get("face") or latest_face_result
+    doc_data = payload.get("doc_data") or payload.get("doc") or payload.get("document") or latest_ocr_result
+
+    if not face_data or not doc_data:
+        return jsonify({
+            "error": "Both face verification data and document validation data are required.",
+            "hint": "Run /verify_photo and /extract_text first, or pass face_data and doc_data in the JSON body."
+        }), 400
+
+    audit_path = str(PROJECT_ROOT / "data" / "audit.log")
+
+    try:
+        consolidated = consolidate_pipeline_scores(
+            face_data=face_data,
+            doc_data=doc_data,
+            weights=payload.get("weights"),
+            audit_log_path=audit_path
+        )
+        return jsonify({
+            "status": "success",
+            "consolidated": consolidated
+        }), 200
     except Exception as e:
         return jsonify({
             "status": "error",
