@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Union, Dict, Any, Tuple
 import json
+from datetime import datetime
 
 # Tesseract path configuration for Windows
 if os.name == 'nt':
@@ -147,7 +148,8 @@ class MRZParser:
                     
                 # Format DOB
                 yy, mm, dd = dob_clean[:2], dob_clean[2:4], dob_clean[4:6]
-                year = f"19{yy}" if int(yy) > 24 else f"20{yy}"
+                current_year_short = datetime.now().year % 100  # gives 25 for 2026
+                year = f"19{yy}" if int(yy) > current_year_short else f"20{yy}"
                 extracted["Date of Birth"] = f"{year}-{mm}-{dd}"
                 
                 # Format Expiry
@@ -174,7 +176,8 @@ class MRZParser:
                         extracted["Nationality"] = country
                     if not extracted["Date of Birth"] and dob_clean.isdigit():
                         yy, mm, dd = dob_clean[:2], dob_clean[2:4], dob_clean[4:6]
-                        year = f"19{yy}" if int(yy) > 24 else f"20{yy}"
+                        current_year_short = datetime.now().year % 100  # gives 25 for 2026
+                        year = f"19{yy}" if int(yy) > current_year_short else f"20{yy}"
                         extracted["Date of Birth"] = f"{year}-{mm}-{dd}"
                     if not extracted["Date of Expiry"] and exp_clean.isdigit():
                         ey, em, ed = exp_clean[:2], exp_clean[2:4], exp_clean[4:6]
