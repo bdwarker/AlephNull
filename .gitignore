@@ -235,7 +235,6 @@ data/uploads/document/*
 data/certs/
 
 # Synthetic / test datasets (large, not for VCS)
-data/synthetic/*
 !data/synthetic/.gitkeep
 
 # Jupyter / notebook checkpoints

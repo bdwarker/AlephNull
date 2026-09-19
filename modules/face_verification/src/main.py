@@ -4,36 +4,41 @@ from pathlib import Path
 from typing import Union, Dict, Any
 import numpy as np
 import cv2
-from deepface import DeepFace
-
+import insightface
+from insightface.app import FaceAnalysis
+from numpy.linalg import norm
 
 class FaceVerification:
     def __init__(
         self,
-        model_name: str = 'Facenet512',
-        detector_backend: str = 'opencv',
-        distance_metric: str = 'euclidean_l2',
-        enforce_detection: bool = True
+        model_name: str = 'buffalo_l',
+        detector_backend: str = 'retinaface',
+        distance_metric: str = 'cosine',
+        enforce_detection: bool = True,
+        *args, **kwargs
     ):
         """
-        Initializes the FaceVerification module.
+        Initializes the FaceVerification module using native InsightFace (ONNX).
         
         Args:
-            model_name (str): The face recognition model to use (default: 'Facenet512').
-            detector_backend (str): The face detector to use (default: 'opencv').
-            distance_metric (str): Metric for comparison (default: 'euclidean_l2').
+            model_name (str): The InsightFace model pack to use (default: 'buffalo_l').
+            detector_backend (str): Kept for API compatibility, uses retinaface internally.
+            distance_metric (str): Kept for API compatibility, uses cosine distance internally.
             enforce_detection (bool): If True, raises an error if a face cannot be detected.
         """
+        # Override the old DeepFace default if passed by the API
+        if model_name == 'Facenet512':
+            model_name = 'buffalo_l'
+            
         self.model_name = model_name
-        self.detector_backend = detector_backend
-        self.distance_metric = distance_metric
         self.enforce_detection = enforce_detection
+        
+        # Initialize InsightFace FaceAnalysis pipeline
+        # providers=['CPUExecutionProvider'] ensures it works natively on edge devices without CUDA
+        self.app = FaceAnalysis(name=self.model_name, providers=['CPUExecutionProvider'])
+        self.app.prepare(ctx_id=0, det_size=(640, 640))
 
     def _prepare_image_input(self, img: Union[str, Path, np.ndarray], label: str = "Image") -> np.ndarray:
-        """
-        Validates and converts image input to a numpy array.
-        Loading it manually prevents Windows path escape issues inside DeepFace.
-        """
         if isinstance(img, (str, Path)):
             path_str = str(Path(img).resolve())
             if not os.path.exists(path_str):
@@ -49,14 +54,11 @@ class FaceVerification:
         else:
             raise TypeError(f"{label} must be a file path (str, Path) or a numpy.ndarray, got {type(img).__name__}")
 
-    def _extract_dominant_face(self, img: np.ndarray, label: str = "Image") -> tuple[np.ndarray, Any, list, dict, int]:
+    def _extract_dominant_face(self, img: np.ndarray, label: str = "Image") -> tuple[Any, list, dict, int]:
         """
-        Extracts the largest / dominant face from an image,
-        with multi-orientation fallback (0°, 90° CW, 180°, 90° CCW).
-        Crops with 15% margin to prevent background noise, watermarks, or stamps from interfering.
-        
+        Extracts the dominant face from an image using InsightFace.
         Returns:
-            (cropped_img, dominant_fa, all_detected_faces, image_dimensions, rotation_angle)
+            (dominant_face_obj, all_detected_faces_info, image_dimensions, rotation_angle)
         """
         rotations = [
             (0, None),
@@ -72,22 +74,12 @@ class FaceVerification:
         for angle, rot_code in rotations:
             cur_img = img if rot_code is None else cv2.rotate(img, rot_code)
             try:
-                faces = DeepFace.extract_faces(
-                    img_path=cur_img,
-                    detector_backend=self.detector_backend,
-                    enforce_detection=False,
-                    align=False
-                )
+                faces = self.app.get(cur_img)
             except Exception:
                 faces = []
 
-            # Filter faces with valid dimensions and confidence
-            valid = [
-                f for f in faces
-                if f.get('confidence', 0) > 0.5
-                and f.get('facial_area', {}).get('w', 0) >= 30
-                and f.get('facial_area', {}).get('h', 0) >= 30
-            ]
+            # Filter faces with valid confidence
+            valid = [f for f in faces if getattr(f, 'det_score', 0) > 0.5]
 
             if valid:
                 best_faces = valid
@@ -101,36 +93,30 @@ class FaceVerification:
         if not best_faces:
             if self.enforce_detection:
                 raise ValueError(f"No face detected in {label}. Please ensure the face is visible, uncovered, and well-lit.")
-            return img, None, [], dims, 0
+            return None, [], dims, 0
 
         # Sort by bounding box area (w * h) descending -> dominant face is largest
-        best_faces.sort(key=lambda f: f['facial_area']['w'] * f['facial_area']['h'], reverse=True)
+        def get_area(f):
+            bbox = f.bbox
+            return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+            
+        best_faces.sort(key=get_area, reverse=True)
         dominant = best_faces[0]
-        fa = dominant['facial_area']
 
-        all_detected = [
-            {
+        all_detected = []
+        for f in best_faces:
+            bbox = f.bbox
+            all_detected.append({
                 "facial_area": {
-                    "x": int(f['facial_area']['x']),
-                    "y": int(f['facial_area']['y']),
-                    "w": int(f['facial_area']['w']),
-                    "h": int(f['facial_area']['h'])
+                    "x": int(bbox[0]),
+                    "y": int(bbox[1]),
+                    "w": int(bbox[2] - bbox[0]),
+                    "h": int(bbox[3] - bbox[1])
                 },
-                "confidence": round(float(f.get('confidence', 1.0)), 4)
-            }
-            for f in best_faces
-        ]
+                "confidence": round(float(f.det_score), 4)
+            })
 
-        # Crop with 15% padding
-        pad_w = int(fa['w'] * 0.15)
-        pad_h = int(fa['h'] * 0.15)
-        x1 = max(0, fa['x'] - pad_w)
-        y1 = max(0, fa['y'] - pad_h)
-        x2 = min(w, fa['x'] + fa['w'] + pad_w)
-        y2 = min(h, fa['y'] + fa['h'] + pad_h)
-
-        cropped = best_img[y1:y2, x1:x2]
-        return (cropped if cropped.size > 0 else best_img), fa, all_detected, dims, best_angle
+        return dominant, all_detected, dims, best_angle
 
     def verify_identity(
         self, 
@@ -139,91 +125,88 @@ class FaceVerification:
         strictness: int = 50
     ) -> Dict[str, Any]:
         """
-        Compares the face in the person_image with the face in the document_image.
-        
-        Args:
-            person_image: File path or numpy BGR array of the live person / selfie.
-            document_image: File path or numpy BGR array of the document ID photo.
-            strictness: Integer from 0 to 100. 50 is default threshold. 100 is very strict. 0 is loose.
-            
-        Returns:
-            dict: Verification results with face boxes and raw diagnostic data
+        Compares the face in the person_image with the face in the document_image using InsightFace ONNX.
         """
         try:
             img1 = self._prepare_image_input(person_image, "Person image")
             img2 = self._prepare_image_input(document_image, "Document image")
 
-            # Extract dominant face crops to eliminate passport micro-watermarks or ghost artifacts
-            face_person, fa_person, faces_person, dims_person, rot_person = self._extract_dominant_face(img1, "Person image")
-            face_doc, fa_doc, faces_doc, dims_doc, rot_doc = self._extract_dominant_face(img2, "Document image")
+            face_person, faces_person, dims_person, rot_person = self._extract_dominant_face(img1, "Person image")
+            face_doc, faces_doc, dims_doc, rot_doc = self._extract_dominant_face(img2, "Document image")
 
-            result = DeepFace.verify(
-                img1_path=face_person,
-                img2_path=face_doc,
-                model_name=self.model_name,
-                detector_backend=self.detector_backend,
-                distance_metric=self.distance_metric,
-                enforce_detection=False,
-                align=True
-            )
+            if not face_person or not face_doc:
+                raise ValueError("Could not find a dominant face in one or both images.")
 
-            # Convert numpy types to native Python types for JSON compatibility
-            distance = float(result.get('distance', 1.0))
+            # Compute Cosine Similarity between 512-d ArcFace embeddings
+            emb1 = face_person.embedding
+            emb2 = face_doc.embedding
             
-            # Default calibrated threshold
-            if self.distance_metric == 'euclidean_l2' and 'threshold' not in result:
-                base_threshold = 1.0400
+            # cosine similarity
+            sim = np.dot(emb1, emb2) / (norm(emb1) * norm(emb2))
+            sim = float(sim)
+            
+            # Distance mapping (1 - sim) for output format compatibility
+            distance = 1.0 - sim
+            
+            # InsightFace ArcFace typical match threshold is around ~0.45 similarity
+            base_sim_threshold = 0.45
+            
+            # Apply strictness modifier to similarity:
+            # strictness = 50 -> modifier = 0.0
+            # strictness = 100 -> modifier = +0.15 (threshold 0.60, stricter)
+            # strictness = 0 -> modifier = -0.15 (threshold 0.30, looser)
+            modifier = ((strictness - 50) / 50.0) * 0.15
+            sim_threshold = base_sim_threshold + modifier
+            
+            is_match = sim >= sim_threshold
+
+            # Calibrated trust score (0 to 100) based on similarity
+            if sim >= sim_threshold:
+                # Map [sim_threshold, 1.0] to [50, 100]
+                range_size = 1.0 - sim_threshold
+                if range_size <= 0:
+                    trust_score = 100.0
+                else:
+                    trust_score = 50.0 + ((sim - sim_threshold) / range_size) * 50.0
             else:
-                base_threshold = float(result.get('threshold', 1.0400 if self.distance_metric == 'euclidean_l2' else 0.40))
-            
-            # Apply strictness modifier:
-            # strictness = 50 -> modifier = 1.00 (base threshold, e.g. 1.04)
-            # strictness = 100 -> modifier = 0.85 (strict threshold, e.g. 0.884)
-            # strictness = 0 -> modifier = 1.15 (loose threshold, e.g. 1.196)
-            modifier = 1.0 + ((50 - strictness) / 50.0) * 0.15
-            threshold = base_threshold * modifier
-            
-            is_match = distance <= threshold
-
-            # Calibrated trust score (0 to 100)
-            safe_thresh = max(threshold, 1e-6)
-            if distance <= safe_thresh:
-                # Range [0, threshold] maps to [100, 50]
-                trust_score = 100.0 - ((distance / safe_thresh) * 50.0)
-            else:
-                # Range [threshold, threshold + 0.40] maps to [50, 0]
-                excess = distance - safe_thresh
-                trust_score = max(0.0, 50.0 - (excess / 0.40) * 50.0)
+                # Map [0.0, sim_threshold] to [0, 50]
+                if sim_threshold <= 0:
+                    trust_score = 0.0
+                else:
+                    trust_score = (max(0.0, sim) / sim_threshold) * 50.0
 
             trust_score = round(max(0.0, min(100.0, float(trust_score))), 2)
+
+            def extract_fa(face_obj):
+                if not face_obj: return None
+                bbox = face_obj.bbox
+                return {
+                    'x': int(bbox[0]), 'y': int(bbox[1]),
+                    'w': int(bbox[2] - bbox[0]), 'h': int(bbox[3] - bbox[1])
+                }
+
+            fa_person = extract_fa(face_person)
+            fa_doc = extract_fa(face_doc)
 
             return {
                 'is_match': bool(is_match),
                 'trust_score': trust_score,
-                'distance': round(distance, 4),
-                'threshold': round(threshold, 4),
-                'base_threshold': round(base_threshold, 4),
+                'distance': round(distance, 4), # using cosine distance for backwards compatibility
+                'similarity': round(sim, 4), # native similarity
+                'threshold': round(1.0 - sim_threshold, 4), # return as distance threshold
+                'sim_threshold': round(sim_threshold, 4),
+                'base_threshold': round(1.0 - base_sim_threshold, 4),
                 'strictness': strictness,
                 'model': self.model_name,
-                'detector_backend': self.detector_backend,
-                'distance_metric': self.distance_metric,
+                'detector_backend': 'retinaface', # inherent to buffalo_l
+                'distance_metric': 'cosine',
                 'detected_faces': {
                     'person': faces_person,
                     'document': faces_doc
                 },
                 'facial_areas': {
-                    'person': {
-                        'x': int(fa_person['x']),
-                        'y': int(fa_person['y']),
-                        'w': int(fa_person['w']),
-                        'h': int(fa_person['h'])
-                    } if fa_person else None,
-                    'document': {
-                        'x': int(fa_doc['x']),
-                        'y': int(fa_doc['y']),
-                        'w': int(fa_doc['w']),
-                        'h': int(fa_doc['h'])
-                    } if fa_doc else None
+                    'person': fa_person,
+                    'document': fa_doc
                 },
                 'image_dimensions': {
                     'person': dims_person,
@@ -234,14 +217,13 @@ class FaceVerification:
                     'document': rot_doc
                 },
                 'raw_verification': {
-                    'distance': round(distance, 4),
-                    'threshold': round(threshold, 4),
-                    'base_threshold': round(base_threshold, 4),
+                    'similarity': round(sim, 4),
+                    'sim_threshold': round(sim_threshold, 4),
                     'strictness_modifier': round(modifier, 4),
                     'verified': bool(is_match),
                     'model': self.model_name,
-                    'detector': self.detector_backend,
-                    'metric': self.distance_metric
+                    'detector': 'retinaface',
+                    'metric': 'cosine'
                 },
                 'error': None
             }
@@ -251,48 +233,37 @@ class FaceVerification:
             if hasattr(e, '__cause__') and e.__cause__:
                 real_error += f" | Cause: {str(e.__cause__)}"
             
-            return {
-                'is_match': False,
-                'trust_score': 0.0,
-                'distance': None,
-                'threshold': None,
-                'model': self.model_name,
-                'detector_backend': self.detector_backend,
-                'distance_metric': self.distance_metric,
-                'detected_faces': {'person': [], 'document': []},
-                'facial_areas': None,
-                'image_dimensions': None,
-                'raw_verification': None,
-                'error': f"Face detection failed: {real_error}"
-            }
+            return self._error_response(f"Face detection failed: {real_error}")
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return {
-                'is_match': False,
-                'trust_score': 0.0,
-                'distance': None,
-                'threshold': None,
-                'model': self.model_name,
-                'detector_backend': self.detector_backend,
-                'distance_metric': self.distance_metric,
-                'detected_faces': {'person': [], 'document': []},
-                'facial_areas': None,
-                'image_dimensions': None,
-                'raw_verification': None,
-                'error': str(e)
-            }
-
+            return self._error_response(str(e))
+            
+    def _error_response(self, error_msg: str) -> Dict[str, Any]:
+        return {
+            'is_match': False,
+            'trust_score': 0.0,
+            'distance': None,
+            'similarity': None,
+            'threshold': None,
+            'sim_threshold': None,
+            'model': self.model_name,
+            'detector_backend': 'retinaface',
+            'distance_metric': 'cosine',
+            'detected_faces': {'person': [], 'document': []},
+            'facial_areas': None,
+            'image_dimensions': None,
+            'raw_verification': None,
+            'error': error_msg
+        }
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="AlephNull Face Verification Module")
+    parser = argparse.ArgumentParser(description="AlephNull Face Verification Module (InsightFace ONNX)")
     parser.add_argument("person_img", nargs="?", help="Path to person/selfie image")
     parser.add_argument("document_img", nargs="?", help="Path to document ID image")
-    parser.add_argument("--model", default="Facenet512", help="Face recognition model (default: Facenet512)")
-    parser.add_argument("--detector", default="opencv", help="Face detector backend (default: opencv)")
-    parser.add_argument("--metric", default="euclidean_l2", help="Distance metric (default: euclidean_l2)")
+    parser.add_argument("--model", default="buffalo_l", help="InsightFace model pack (default: buffalo_l)")
     parser.add_argument("--strictness", type=int, default=50, help="Strictness 0-100 (default: 50)")
     parser.add_argument("--no-enforce", action="store_false", dest="enforce", help="Do not enforce face detection")
 
@@ -301,8 +272,6 @@ if __name__ == "__main__":
     if args.person_img and args.document_img:
         verifier = FaceVerification(
             model_name=args.model,
-            detector_backend=args.detector,
-            distance_metric=args.metric,
             enforce_detection=args.enforce
         )
         print(f"Comparing: {args.person_img} vs {args.document_img}")
@@ -312,4 +281,4 @@ if __name__ == "__main__":
             print(f"  {k}: {v}")
     else:
         print("AlephNull Face Verification Module ready.")
-        print("Usage: python main.py <person_image_path> <document_image_path> [--model MODEL] [--detector DETECTOR] [--metric METRIC] [--strictness 0-100]")
+        print("Usage: python main.py <person_image_path> <document_image_path> [--model buffalo_l] [--strictness 0-100]")
