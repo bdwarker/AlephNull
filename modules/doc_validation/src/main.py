@@ -16,10 +16,12 @@ import os
 import sys
 import json
 import re
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Union, Dict, Any, Optional
 
-# Fix Windows console encoding issues with UTF-8
+# Safe UTF-8 console output for Windows
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -35,11 +37,31 @@ if str(MODULE_ROOT) not in sys.path:
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+try:
+    from .mrz_parser import parse_mrz
+except (ImportError, ValueError):
+    try:
+        # pyrefly: ignore [missing-import]
+        from mrz_parser import parse_mrz
+    except ImportError:
+        from modules.doc_validation.src.mrz_parser import parse_mrz
+
+# pyrefly: ignore [missing-import]
 from rules.passport_rules import validate_passport
+# pyrefly: ignore [missing-import]
 from rules.id_card_rules import validate_id_card
+# pyrefly: ignore [missing-import]
 from rules.dl_rules import validate_driving_license
+# pyrefly: ignore [missing-import]
 from rules.visa_rules import validate_visa
+# pyrefly: ignore [missing-import]
 from rules.permit_rules import validate_permit
+
+
+def _log(msg: str):
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{timestamp}] [DOC_VAL] {msg}", flush=True)
+
 
 SUPPORTED_DOCUMENTS = [
     "passport",
@@ -92,34 +114,26 @@ class DocumentValidator:
             clean_k = re.sub(r'[\s_-]', '', k.lower())
             normalized[clean_k] = v
 
-        # Key alias mappings
-        aliases = {
-            "name": ["name", "fullname", "holdername"],
-            "passport_number": ["passportnumber", "passportno", "documentnumber", "docnumber"],
-            "id_number": ["idnumber", "idno", "aadhaarnumber", "aadhaarno", "uid"],
-            "license_number": ["licensenumber", "licenseno", "dlno", "dlnumber"],
-            "visa_number": ["visanumber", "visano"],
-            "permit_number": ["permitnumber", "permitno"],
-            "dob": ["dateofbirth", "birthdate", "dob"],
-            "expiry": ["dateofexpiry", "expirydate", "validuntil", "validtill", "expiry"],
-            "issue_date": ["dateofissue", "issuedate", "issuingdate"],
-            "nationality": ["nationality", "country", "citizenship"],
+        alias_map = {
+            "name": ["name", "fullname", "holdername", "givenname", "full_name"],
+            "passport_number": ["passportnumber", "passportno", "documentnumber", "docnumber", "docno"],
+            "id_number": ["idnumber", "idno", "documentnumber", "docnumber", "docno", "aadhaarnumber", "aadhaar", "nationalid"],
+            "dob": ["dob", "dateofbirth", "birthdate", "birth"],
+            "expiry": ["expiry", "dateofexpiry", "expirationdate", "validuntil", "validtill"],
+            "nationality": ["nationality", "countrycode", "country", "citizenship"],
             "gender": ["gender", "sex"],
-            "address": ["address", "residentialaddress"],
-            "blood_group": ["bloodgroup", "bloodtype"],
-            "visa_type": ["visatype", "visacategory", "type"],
-            "stay_duration": ["stayduration", "durationofstay", "duration"],
-            "entries": ["entries", "entrytype", "entryvalidation"]
+            "license_number": ["licensenumber", "licenseno", "dlno", "drivinglicensenumber"],
+            "issue_date": ["issuedate", "dateofissue"],
+            "blood_group": ["bloodgroup", "blood"]
         }
 
         canonical = {}
-        for target, source_keys in aliases.items():
-            for sk in source_keys:
-                if sk in normalized and normalized[sk] is not None:
-                    canonical[target] = normalized[sk]
+        for target, aliases in alias_map.items():
+            for alias in aliases:
+                if alias in normalized and normalized[alias]:
+                    canonical[target] = normalized[alias]
                     break
 
-        # Merge raw fields alongside canonical so all lookups succeed
         canonical.update(data)
         return canonical
 
@@ -130,14 +144,11 @@ class DocumentValidator:
     ) -> Dict[str, Any]:
         """
         Main validation pipeline.
-        
-        Args:
-            ocr_input: Dict from Module 1 (DocumentOCR), flat dictionary, JSON string, or filepath.
-            doc_type: Optional document type override ('passport', 'national_id', 'driving_license', 'visa', 'permit').
-            
-        Returns:
-            dict: Comprehensive validation results conforming to SIH PS26188 standards.
         """
+        start_time = time.time()
+        _log("=" * 60)
+        _log("STARTING DOCUMENT VALIDATION ENGINE")
+
         # 1. Parse Input
         raw_data = {}
         if isinstance(ocr_input, (str, Path)):
@@ -146,17 +157,22 @@ class DocumentValidator:
                 try:
                     with open(path_obj, "r", encoding="utf-8") as f:
                         raw_data = json.load(f)
+                    _log(f"Loaded JSON input from file: {path_obj}")
                 except Exception as e:
+                    _log(f"ERROR reading JSON file: {e}")
                     return self._error_result(f"Failed to read JSON file: {e}")
             else:
-                # Attempt to parse as raw JSON string
                 try:
                     raw_data = json.loads(str(ocr_input))
+                    _log("Parsed raw JSON string input")
                 except Exception:
+                    _log(f"ERROR: Invalid input string/file: {ocr_input}")
                     return self._error_result(f"Invalid input. File not found or malformed JSON: {ocr_input}")
         elif isinstance(ocr_input, dict):
             raw_data = ocr_input
+            _log(f"Received dictionary input with {len(raw_data)} keys")
         else:
+            _log(f"ERROR: Unsupported input type: {type(ocr_input).__name__}")
             return self._error_result(f"Unsupported input type: {type(ocr_input).__name__}")
 
         # 2. Extract Document Type
@@ -168,15 +184,19 @@ class DocumentValidator:
             or "passport"
         )
         norm_type = self.normalize_doc_type(detected_doc_type)
+        _log(f"Detected Document Type: '{detected_doc_type}' -> Normalized: '{norm_type}'")
 
         # 3. Handle Module 1 Nested Outputs vs Direct Dicts
         extracted_fields = raw_data.get("extracted_fields") or raw_data
         mrz_data = raw_data.get("mrz_parsed")
-        
+
         # Normalize keys
         fields = self._normalize_fields(extracted_fields)
+        _log(f"Normalized fields for rule checking ({len(fields)} fields): {list(fields.keys())}")
 
         # 4. Dispatch to Document-Specific Rule Engine
+        validation = {}
+        _log(f"Dispatching to validation rule engine for: {norm_type}")
         if norm_type == "passport":
             validation = validate_passport(fields, mrz_data=mrz_data)
         elif norm_type in ["national_id", "id_card", "aadhaar"]:
@@ -188,27 +208,66 @@ class DocumentValidator:
         elif norm_type == "permit":
             validation = validate_permit(fields)
         else:
+            _log(f"ERROR: Unsupported document type '{detected_doc_type}'")
             return self._error_result(f"Unsupported document type '{detected_doc_type}'")
 
-        # 5. Compute Border Security Verdict & Recommendation
-        score = validation["score"]
-        is_valid = validation["valid"]
+        # Cross Validation VIZ vs MRZ
+        cross_checks = validation.get("cross_checks", [])
         anomalies = list(set(validation.get("anomalies", [])))
 
-        if is_valid and score >= 80:
-            status = "PASSED"
-            verdict = "CLEARANCE"
-            decision_summary = "Document fully compliant with official formatting and security standards. Recommended for automated clearance."
-        elif score >= 60 and not any("CRITICAL" in c.get("severity", "") and c.get("status") == "WRONG" for c in validation["checks"]):
-            status = "FLAGGED"
-            verdict = "SECONDARY_INSPECTION"
-            decision_summary = f"Document has {len(validation['flags'])} non-critical warning(s). Route to secondary inspection for physical verification."
+        if mrz_data and "mrz_lines" in mrz_data:
+            _log("Cross-verifying Visual Inspection Zone (VIZ) against MRZ data...")
+            parsed_mrz = parse_mrz(mrz_data["mrz_lines"])
+            if parsed_mrz.get("is_valid"):
+                if "dob" in fields:
+                    viz_dob = str(fields["dob"]).replace("-", "")[2:]
+                    mrz_dob = parsed_mrz.get("dob")
+                    match = (viz_dob == mrz_dob)
+                    cross_checks.append({"check": "DOB VIZ vs MRZ", "match": match, "visual_value": viz_dob, "mrz_value": mrz_dob})
+                    _log(f"  Cross-Check DOB : VIZ={viz_dob} vs MRZ={mrz_dob} -> {'MATCH' if match else 'MISMATCH'}")
+
+                if "document_number" in fields or "passport_number" in fields:
+                    viz_doc = str(fields.get("document_number", fields.get("passport_number", "")))
+                    mrz_doc = parsed_mrz.get("document_number")
+                    match = (viz_doc == mrz_doc)
+                    cross_checks.append({"check": "Doc Number VIZ vs MRZ", "match": match, "visual_value": viz_doc, "mrz_value": mrz_doc})
+                    _log(f"  Cross-Check Doc#: VIZ={viz_doc} vs MRZ={mrz_doc} -> {'MATCH' if match else 'MISMATCH'}")
+            else:
+                anomalies.append("MRZ Checksum Validation Failed")
+                _log("  WARNING: MRZ Checksum Validation Failed!")
+
+        # 5. Compile Suspicious Points & Document Compliance Score
+        score = validation["score"]
+        is_valid = validation["valid"]
+
+        suspicious_points = []
+        for c in validation.get("checks", []):
+            if c.get("status") in ["WRONG", "WARNING"]:
+                fld = c.get("field", "Field")
+                rsn = c.get("reason", "Validation issue")
+                suspicious_points.append(f"{fld}: {rsn}")
+
+        for cc in cross_checks:
+            if not cc.get("match"):
+                suspicious_points.append(f"Visual vs MRZ Mismatch: {cc.get('check', 'Cross-check')} (Visual: '{cc.get('visual_value')}' vs MRZ: '{cc.get('mrz_value')}')")
+
+        for anom in anomalies:
+            anom_str = str(anom)
+            if not any(anom_str.lower() in sp.lower() for sp in suspicious_points):
+                suspicious_points.append(anom_str)
+
+        # De-duplicate suspicious points while preserving order
+        unique_suspicious = []
+        for pt in suspicious_points:
+            if pt not in unique_suspicious:
+                unique_suspicious.append(pt)
+
+        if len(unique_suspicious) == 0:
+            status = "VERIFIED"
+            summary_txt = "All document checks, format rules, and mathematical checksums verified successfully. No suspicious points identified."
         else:
-            status = "REJECTED"
-            verdict = "REJECT"
-            crit_reasons = [c["reason"] for c in validation["checks"] if c.get("severity") == "CRITICAL" and c.get("status") == "WRONG"]
-            reason_txt = "; ".join(crit_reasons[:2]) if crit_reasons else "Failed security and format validation"
-            decision_summary = f"High fraud risk detected: {reason_txt}. Immediate officer intervention required."
+            status = "SUSPICIOUS_POINTS_IDENTIFIED"
+            summary_txt = f"{len(unique_suspicious)} suspicious point(s) flagged by document validation engine for officer review."
 
         # Compute summary metrics
         total_checks = len(validation["checks"])
@@ -216,14 +275,24 @@ class DocumentValidator:
         failed_checks = sum(1 for c in validation["checks"] if c.get("status") == "WRONG")
         warning_checks = sum(1 for c in validation["checks"] if c.get("status") == "WARNING")
 
+        dur = time.time() - start_time
+        _log(f"Validation Checks Summary: {passed_checks}/{total_checks} passed, {failed_checks} failed, {warning_checks} warnings")
+        _log(f"COMPLIANCE SCORE: {round(score, 1)}/100 | STATUS: {status} | SUSPICIOUS POINTS: {len(unique_suspicious)}")
+        for pt in unique_suspicious:
+            _log(f"  🚩 SUSPICIOUS: {pt}")
+        _log(f"DOCUMENT VALIDATION FINISHED in {dur:.2f}s")
+        _log("=" * 60)
+
         return {
             "valid": is_valid,
             "score": round(score, 1),
             "status": status,
             "document_type": norm_type,
+            "suspicious_points": unique_suspicious,
             "decision": {
-                "verdict": verdict,
-                "summary": decision_summary
+                "score": round(score, 1),
+                "suspicious_points": unique_suspicious,
+                "summary": summary_txt
             },
             "checks_summary": {
                 "total": total_checks,
@@ -234,19 +303,22 @@ class DocumentValidator:
             "checks": validation["checks"],
             "flags": validation["flags"],
             "anomalies": anomalies,
-            "cross_checks": validation.get("cross_checks", []),
+            "cross_checks": cross_checks,
             "input_fields": {k: v for k, v in fields.items() if isinstance(v, (str, int, float, bool)) and len(str(v)) < 100}
         }
 
     def _error_result(self, error_message: str) -> Dict[str, Any]:
         """Returns structured error dictionary."""
+        _log(f"Document validation error: {error_message}")
         return {
             "valid": False,
             "score": 0.0,
-            "status": "REJECTED",
+            "status": "ERROR",
             "document_type": "unknown",
+            "suspicious_points": [f"Document validation error: {error_message}"],
             "decision": {
-                "verdict": "REJECT",
+                "score": 0.0,
+                "suspicious_points": [f"Document validation error: {error_message}"],
                 "summary": f"Validation could not proceed: {error_message}"
             },
             "checks_summary": {"total": 0, "passed": 0, "failed": 1, "warnings": 0},
@@ -263,7 +335,7 @@ class DocumentValidator:
         }
 
 
-# Backwards compatibility function matching sample code syntax
+# Functional interface
 def validate_document(ocr_output: Union[Dict[str, Any], str]) -> Dict[str, Any]:
     """Top-level functional interface matching prototype specification."""
     validator = DocumentValidator()
@@ -275,62 +347,23 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="AlephNull Module 2: Document Validation Engine")
     parser.add_argument("input", nargs="?", help="Path to JSON file or raw JSON string")
-    parser.add_argument("--type", "-t", default=None, help="Document type (passport, national_id, driving_license, visa, permit)")
-    parser.add_argument("--pretty", "-p", action="store_true", help="Format output with inspection box")
+    parser.add_argument("--type", "-t", default=None, help="Document type")
 
     args = parser.parse_args()
-
     validator = DocumentValidator()
 
     if args.input:
         res = validator.validate_document(args.input, doc_type=args.type)
     else:
-        # Check if module1_output.json exists in cwd
-        default_file = Path("module1_output.json")
-        if default_file.exists():
-            print("Found module1_output.json. Running validation...")
-            res = validator.validate_document(str(default_file), doc_type=args.type)
-        else:
-            # Run demonstration on sample passport
-            print("AlephNull Document Validation Module ready.")
-            print("No input provided. Running self-diagnostic demonstration on a sample passport...")
-            demo_passport = {
-                "document_type": "passport",
-                "name": "MOHAMMED HASSAN",
-                "passport_number": "Z1234567",
-                "nationality": "IND",
-                "dob": "1988-01-23",
-                "expiry": "2030-01-01",
-                "gender": "Male"
-            }
-            res = validator.validate_document(demo_passport)
+        demo_passport = {
+            "document_type": "passport",
+            "name": "MOHAMMED HASSAN",
+            "passport_number": "Z1234567",
+            "nationality": "IND",
+            "dob": "1988-01-23",
+            "expiry": "2030-01-01",
+            "gender": "Male"
+        }
+        res = validator.validate_document(demo_passport)
 
-    print("\n========================================================")
-    print("       ALEPHNULL MODULE 2 — DOCUMENT VALIDATION")
-    print("========================================================")
-    print(f" Document Type  : {res['document_type'].upper()}")
-    print(f" Overall Status : {res['status']}")
-    print(f" Validity Score : {res['score']} / 100")
-    print(f" Officer Verdict: {res['decision']['verdict']}")
-    print(f" Decision Note  : {res['decision']['summary']}")
-    print("--------------------------------------------------------")
-    print(" Checks Summary :", res["checks_summary"])
-    print("--------------------------------------------------------")
-    print(" Rule Checks Breakdown:")
-    for c in res["checks"]:
-        sym = "PASS" if c["status"] == "CORRECT" else "WARN" if c["status"] == "WARNING" else "FAIL"
-        print(f"  [{sym:<4}] {c['field']:<26} -> {c['status']:<7} ({c.get('severity', 'INFO'):<8}) : {c['reason']}")
-
-    if res["flags"]:
-        print("--------------------------------------------------------")
-        print(" Active Security Flags & Warnings:")
-        for f in res["flags"]:
-            print(f"  [FLAG] {f}")
-
-    if res.get("cross_checks"):
-        print("--------------------------------------------------------")
-        print(" Cross-Verification Results:")
-        for cc in res["cross_checks"]:
-            match_sym = "MATCH" if cc.get("match") else "MISMATCH"
-            print(f"  <-> {cc['check']:<28} : {match_sym} (Visual: {cc.get('visual_value')}, MRZ: {cc.get('mrz_value')})")
-    print("========================================================\n")
+    print(json.dumps(res, indent=2))

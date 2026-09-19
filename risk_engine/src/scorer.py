@@ -3,15 +3,21 @@ Transparent weighted scoring model for cross-module risk signals (AlephNull Risk
 Fulfills Problem Statement PS26188 (SIH 2024 / Sashastra Seema Bal).
 """
 
+import sys
 from typing import Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
 from .audit_log import write_audit_log
 
+# Safe UTF-8 console output for Windows
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+def _log(msg: str):
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{timestamp}] [RISK_ENGINE] {msg}", flush=True)
+
 # Category Weights based on importance vs AI model accuracy
-# - Biometric Face Match (45%): High importance for physical presenter binding; DeepFace FaceNet512.
-# - Document Security & Checksums (35%): Critical mathematical certainty (ICAO 7-3-1, Verhoeff); 100% deterministic detection of forgeries.
-# - Document Standards & Temporal Coherence (20%): Expiration status, legal driving age >= 18, RTO/ISO standard codes.
 CATEGORY_WEIGHTS = {
     "biometric_face": {
         "weight": 0.45,
@@ -44,13 +50,9 @@ def consolidate_pipeline_scores(
 ) -> Dict[str, Any]:
     """
     Consolidates scores across Module 4 (Face Verification) and Module 2 (Document Validation).
-    
-    Weights each category based on:
-    1. Operational importance for border screening (imposter detection vs document forgery).
-    2. Deterministic accuracy of the AI/algorithmic verification methods.
-    
-    Returns explainable breakdown, consolidated score (0-100), risk level, and officer recommendation.
     """
+    _log("=" * 60)
+    _log("CONSOLIDATING MULTI-MODAL SCREENING RISK SIGNALS")
     # 1. Extract Biometric Face Signal
     face_verif = face_data.get("verification") if isinstance(face_data.get("verification"), dict) else face_data
     face_score = float(face_verif.get("trust_score", 0.0) if face_verif else 0.0)
@@ -89,25 +91,43 @@ def consolidate_pipeline_scores(
     raw_consolidated = (face_score * w_face) + (sec_score * w_sec) + (standards_score * w_std)
 
     # 4. Security Guardrails & Gatekeeper Penalties
-    # In border security, a critical failure in ANY pillar invalidates the clearance:
-    critical_flags = []
+    # Collect all suspicious points and critical anomalies:
+    suspicious_points = []
     has_critical_failure = False
 
     if not is_face_match:
-        critical_flags.append("BIOMETRIC_MISMATCH: Live presenter does not match document photo")
+        f_thresh = face_verif.get("threshold", 0.40) if face_verif else 0.40
+        suspicious_points.append(f"Biometric Face Mismatch: Presenter does not match document photo (score: {round(face_score, 1)}/100, limit: {f_thresh})")
         has_critical_failure = True
+
+    # Pull suspicious points directly from Module 2 Document Validation
+    doc_suspicious = val_data.get("suspicious_points") or []
+    for sp in doc_suspicious:
+        if sp not in suspicious_points:
+            suspicious_points.append(sp)
 
     if not is_doc_valid:
-        critical_flags.append(f"DOCUMENT_INVALID: {val_data.get('decision', {}).get('summary', 'Failed format or security validation')}")
+        doc_msg = val_data.get('decision', {}).get('summary') or "Document failed format or integrity checks"
+        if not any("format or integrity" in s.lower() for s in suspicious_points):
+            suspicious_points.append(f"Document Rule Validation Flag: {doc_msg}")
         has_critical_failure = True
 
-    if any("EXPIRED_DOCUMENT" in str(a) for a in anomalies):
-        critical_flags.append("EXPIRED_TRAVEL_DOCUMENT: Document is expired and invalid for border crossing")
-        has_critical_failure = True
+    for a in anomalies:
+        a_str = str(a)
+        if "EXPIRED_DOCUMENT" in a_str and not any("expired" in s.lower() for s in suspicious_points):
+            suspicious_points.append("Expired Document: Document is expired and invalid for border crossing")
+            has_critical_failure = True
+        elif ("CHECKSUM" in a_str or "TAMPERING" in a_str) and not any("checksum" in s.lower() for s in suspicious_points):
+            suspicious_points.append("Security Integrity Flag: Checksum or visual/MRZ mismatch detected")
+            has_critical_failure = True
+        elif not any(a_str.lower() in s.lower() for s in suspicious_points):
+            suspicious_points.append(a_str)
 
-    if any("CHECKSUM" in str(a) or "TAMPERING" in str(a) for a in anomalies):
-        critical_flags.append("SECURITY_INTEGRITY_COMPROMISED: Checksum or visual/MRZ mismatch detected")
-        has_critical_failure = True
+    # De-duplicate suspicious points
+    unique_suspicious = []
+    for p in suspicious_points:
+        if p not in unique_suspicious:
+            unique_suspicious.append(p)
 
     # If critical failure exists, cap consolidated score
     final_score = raw_consolidated
@@ -117,20 +137,13 @@ def consolidate_pipeline_scores(
 
     final_score = round(max(0.0, min(100.0, final_score)), 1)
 
-    # 5. Officer Verdict & Risk Category
-    if final_score >= 82.0 and not has_critical_failure:
-        verdict = "CLEARANCE"
-        risk_level = "LOW"
-        recommendation = "Identity and document verified with high confidence. Proceed with automated clearance."
-    elif final_score >= 60.0 and not has_critical_failure:
-        verdict = "SECONDARY_INSPECTION"
-        risk_level = "MEDIUM"
-        recommendation = "Borderline confidence or non-critical document warning. Route passenger to secondary inspection officer."
+    # 5. Officer Decision Support (Objective score & highlighted points only - no directive guidance)
+    if len(unique_suspicious) == 0 and final_score >= 80.0:
+        summary_txt = "All automated biometric and document checks verified without flags. No suspicious points identified."
+        status_txt = "NO_ANOMALIES"
     else:
-        verdict = "REJECT"
-        risk_level = "HIGH"
-        reasons = "; ".join(critical_flags[:2]) if critical_flags else "Consolidated risk threshold breached"
-        recommendation = f"High security fraud risk detected ({reasons}). Immediate physical detention / rejection required."
+        summary_txt = f"{len(unique_suspicious)} suspicious point(s) flagged by system for officer review."
+        status_txt = "SUSPICIOUS_POINTS_FLAGGED"
 
     breakdown = [
         {
@@ -164,12 +177,13 @@ def consolidate_pipeline_scores(
 
     result = {
         "consolidated_score": final_score,
+        "score": final_score,
         "raw_weighted_score": round(raw_consolidated, 1),
-        "verdict": verdict,
-        "risk_level": risk_level,
-        "recommendation": recommendation,
-        "is_cleared": verdict == "CLEARANCE",
-        "critical_flags": critical_flags,
+        "status": status_txt,
+        "suspicious_points": unique_suspicious,
+        "summary": summary_txt,
+        "is_cleared": len(unique_suspicious) == 0,
+        "critical_flags": unique_suspicious,
         "category_breakdown": breakdown,
         "individual_scores": {
             "face_verification": {
@@ -184,10 +198,18 @@ def consolidate_pipeline_scores(
         "timestamp": datetime.now().isoformat()
     }
 
+    _log(f"Face Biometric Score: {round(face_score, 1)} (Match: {is_face_match})")
+    _log(f"Doc Validation Score: {round(doc_score, 1)} (Valid: {is_doc_valid})")
+    _log(f"Final Consolidated Trust Score: {final_score}/100 | Suspicious Points: {len(unique_suspicious)}")
+    for sp in unique_suspicious:
+        _log(f"  🚩 SUSPICIOUS POINT: {sp}")
+    _log(f"Summary: {summary_txt}")
+    _log("=" * 60)
+
     # 6. Audit Trail Logging (SIH 2024 / SSB Requirement)
     if audit_log_path:
         try:
-            log_entry = f"[{result['timestamp']}] VERDICT={verdict} SCORE={final_score} RISK={risk_level} FLAGS={len(critical_flags)}"
+            log_entry = f"[{result['timestamp']}] SCORE={final_score} FLAGS={len(unique_suspicious)}"
             write_audit_log(audit_log_path, log_entry)
         except Exception:
             pass

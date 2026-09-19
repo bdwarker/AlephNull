@@ -1,6 +1,7 @@
 import os
 import sys
 import uuid
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +15,10 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
+def _log(msg: str):
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{timestamp}] [API] {msg}", flush=True)
+
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,30 +27,34 @@ if str(PROJECT_ROOT) not in sys.path:
 # Import FaceVerification from modules
 try:
     from modules.face_verification.src.main import FaceVerification
+    _log("FaceVerification module imported successfully.")
 except ImportError as e:
     FaceVerification = None
-    print(f"Warning: Could not import FaceVerification: {e}")
+    _log(f"Warning: Could not import FaceVerification: {e}")
 
 # Import DocumentOCR from modules
 try:
     from modules.ocr_extraction.src.main import DocumentOCR
+    _log("DocumentOCR module imported successfully.")
 except ImportError as e:
     DocumentOCR = None
-    print(f"Warning: Could not import DocumentOCR: {e}")
+    _log(f"Warning: Could not import DocumentOCR: {e}")
 
 # Import DocumentValidator from modules
 try:
     from modules.doc_validation.src.main import DocumentValidator
+    _log("DocumentValidator module imported successfully.")
 except ImportError as e:
     DocumentValidator = None
-    print(f"Warning: Could not import DocumentValidator: {e}")
+    _log(f"Warning: Could not import DocumentValidator: {e}")
 
 # Import Risk Engine scorer
 try:
     from risk_engine.src.scorer import consolidate_pipeline_scores
+    _log("Risk Engine scorer imported successfully.")
 except ImportError as e:
     consolidate_pipeline_scores = None
-    print(f"Warning: Could not import consolidate_pipeline_scores: {e}")
+    _log(f"Warning: Could not import consolidate_pipeline_scores: {e}")
 
 app = Flask(__name__, static_folder=str(PROJECT_ROOT / "ui"), static_url_path="")
 CORS(app)
@@ -60,15 +69,52 @@ UPLOAD_DIRS = {
 for d in UPLOAD_DIRS.values():
     d.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp", "tiff"}
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "pdf"}
 
-# Cache for the most recently uploaded images and OCR results
+# Cache most recent uploads in memory
 latest_uploads = {
     "person": None,
     "document": None
 }
-latest_ocr_result = None
+
+# Cache most recent module results
 latest_face_result = None
+latest_ocr_result = None
+
+try:
+    import pypdfium2 as pdfium
+    _log("pypdfium2 PDF renderer imported successfully.")
+except ImportError as e:
+    pdfium = None
+    _log(f"Warning: pypdfium2 not available: {e}")
+
+
+def convert_pdf_to_image(pdf_path: str, output_path: str) -> bool:
+    """Renders page 0 of a PDF file to a high-resolution JPEG image."""
+    if pdfium is None:
+        _log("ERROR: pypdfium2 is not available to convert PDF.")
+        return False
+    pdf = None
+    try:
+        _log(f"Rendering PDF page 1: {pdf_path} -> {output_path}")
+        pdf = pdfium.PdfDocument(pdf_path)
+        if len(pdf) == 0:
+            _log(f"ERROR: PDF file has 0 pages: {pdf_path}")
+            return False
+        page = pdf[0]
+        pil_img = page.render(scale=3.0).to_pil()
+        pil_img.save(output_path, "JPEG", quality=95)
+        _log(f"Successfully converted PDF to image ({pil_img.width}x{pil_img.height}): {output_path}")
+        return True
+    except Exception as e:
+        _log(f"ERROR rendering PDF to image: {e}")
+        return False
+    finally:
+        if pdf is not None:
+            try:
+                pdf.close()
+            except Exception:
+                pass
 
 
 def is_allowed_file(filename: str) -> bool:
@@ -76,76 +122,77 @@ def is_allowed_file(filename: str) -> bool:
 
 
 def save_image_file(file_storage, quantifier: str) -> tuple[str, str]:
-    """
-    Saves an uploaded file to the designated quantifier directory.
-    Returns (filename, absolute_file_path).
-    """
     ext = file_storage.filename.rsplit(".", 1)[1].lower() if "." in file_storage.filename else "jpg"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    unique_id = uuid.uuid4().hex[:6]
-    clean_filename = secure_filename(file_storage.filename)
-    stem = Path(clean_filename).stem if clean_filename else quantifier
-    
-    saved_filename = f"{quantifier}_{timestamp}_{unique_id}_{stem}.{ext}"
-    target_dir = UPLOAD_DIRS[quantifier]
-    save_path = target_dir / saved_filename
-    file_storage.save(str(save_path))
-    
-    # Update latest pointer
-    latest_uploads[quantifier] = str(save_path)
-    return saved_filename, str(save_path)
+    unique_id = uuid.uuid4().hex[:8]
+
+    if ext == "pdf":
+        temp_pdf_name = f"{quantifier}_{unique_id}.pdf"
+        temp_pdf_path = UPLOAD_DIRS[quantifier] / temp_pdf_name
+        file_storage.save(str(temp_pdf_path))
+        _log(f"Saved uploaded PDF file -> {temp_pdf_path}")
+
+        target_name = f"{quantifier}_{unique_id}.jpg"
+        target_path = UPLOAD_DIRS[quantifier] / target_name
+        success = convert_pdf_to_image(str(temp_pdf_path), str(target_path))
+        if not success:
+            raise ValueError(f"Failed to render PDF into document image for processing: {file_storage.filename}")
+
+        latest_uploads[quantifier] = str(target_path)
+        return target_name, str(target_path)
+    else:
+        unique_name = f"{quantifier}_{unique_id}.{ext}"
+        target_path = UPLOAD_DIRS[quantifier] / unique_name
+        file_storage.save(str(target_path))
+        latest_uploads[quantifier] = str(target_path)
+        _log(f"Saved uploaded {quantifier} image -> {target_path}")
+        return unique_name, str(target_path)
 
 
-@app.route("/", methods=["GET"])
+@app.before_request
+def log_incoming_request():
+    # Avoid spamming logs for static file requests
+    if not request.path.startswith(("/static", "/style.css", "/script.js", "/favicon")):
+        _log(f"---> HTTP {request.method} {request.full_path.rstrip('?')} [Remote: {request.remote_addr}]")
+
+
+@app.route("/")
 def index():
-    return send_from_directory(app.static_folder, "index.html")
+    return send_from_directory(str(PROJECT_ROOT / "ui"), "index.html")
 
-@app.route("/health", methods=["GET"])
-def health_check():
+
+@app.route("/api")
+def api_root():
     return jsonify({
-        "status": "healthy",
-        "service": "AlephNull Identity Verification API",
-        "endpoints": {
-            "/upload": "POST (accepts 'file' with quantifier 'document' or 'person')",
-            "/verify_photo": "POST (compares face in person photo with document photo)",
-            "/extract_text": "POST (runs OCR on document photo)",
-            "/validate_document": "POST (runs format and standard validation on document data)",
-            "/consolidate_score": "POST (combines face and doc scores with transparent weights)"
-        },
+        "service": "AlephNull Border Verification API",
+        "version": "2.0.0",
+        "status": "online",
         "modules": {
             "face_verification": bool(FaceVerification),
             "ocr_extraction": bool(DocumentOCR),
             "doc_validation": bool(DocumentValidator),
             "risk_engine": bool(consolidate_pipeline_scores)
         },
-        "latest_uploads": {
-            "person": bool(latest_uploads["person"]),
-            "document": bool(latest_uploads["document"])
-        }
-    }), 200
+        "endpoints": [
+            "POST /upload",
+            "POST /verify_photo",
+            "POST /extract_text",
+            "POST /validate_document",
+            "POST /consolidate_score"
+        ]
+    })
 
 
 @app.route("/upload", methods=["POST"])
-def upload_image():
-    """
-    Upload endpoint supporting quantifiers: 'document' and 'person'.
-    
-    Usage:
-    1. Single upload:
-       - File key: 'file' or 'image'
-       - Form/Query param: 'type', 'quantifier', or 'image_type' set to 'document' or 'person'
-    2. Multi-key upload:
-       - File key 'person': uploaded as person quantifier
-       - File key 'document': uploaded as document quantifier
-    """
-    # Check if direct quantifier-named files were provided (e.g., person and/or document)
+def upload_file():
+    _log("Processing /upload request...")
     handled_files = {}
-    
+
     for quantifier in ["person", "document"]:
         if quantifier in request.files:
             file_item = request.files[quantifier]
             if file_item and file_item.filename != "":
                 if not is_allowed_file(file_item.filename):
+                    _log(f"Upload rejected: Invalid extension for {quantifier} ({file_item.filename})")
                     return jsonify({
                         "error": f"Invalid file type for {quantifier}. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
                     }), 400
@@ -157,18 +204,18 @@ def upload_image():
                 }
 
     if handled_files:
+        _log(f"Direct uploads successful: {list(handled_files.keys())}")
         return jsonify({
             "status": "success",
             "message": f"Uploaded {', '.join(handled_files.keys())} successfully",
             "uploads": handled_files
         }), 201
 
-    # Standard upload with quantifier parameter
     quantifier = (
-        request.form.get("type") 
-        or request.form.get("quantifier") 
-        or request.form.get("image_type") 
-        or request.args.get("type") 
+        request.form.get("type")
+        or request.form.get("quantifier")
+        or request.form.get("image_type")
+        or request.args.get("type")
         or request.args.get("quantifier")
     )
 
@@ -183,7 +230,6 @@ def upload_image():
             "error": f"Invalid quantifier '{quantifier}'. Allowed values are 'document' and 'person'."
         }), 400
 
-    # Retrieve uploaded file
     file_item = request.files.get("file") or request.files.get("image")
     if not file_item or file_item.filename == "":
         return jsonify({
@@ -209,24 +255,16 @@ def upload_image():
 
 @app.route("/verify_photo", methods=["POST", "GET"])
 def verify_photo():
-    """
-    Verifies person photo against document photo using FaceVerification.
-    
-    Accepts:
-    - JSON payload: {"person_path": "...", "document_path": "..."}
-    - Form/Query params: 'person_path' and 'document_path'
-    - Direct multipart files: 'person' and 'document'
-    - Or falls back to the most recently uploaded 'person' and 'document' images.
-    """
+    _log("Processing /verify_photo request...")
     if FaceVerification is None:
+        _log("ERROR: FaceVerification module not loaded.")
         return jsonify({
-            "error": "FaceVerification module is not available. Please ensure dependencies (deepface, etc.) are installed."
+            "error": "FaceVerification module is not available. Please ensure dependencies are installed."
         }), 500
 
     person_img_path = None
     doc_img_path = None
 
-    # 1. Direct file upload inside /verify_photo
     if "person" in request.files and "document" in request.files:
         p_file = request.files["person"]
         d_file = request.files["document"]
@@ -234,48 +272,48 @@ def verify_photo():
             _, person_img_path = save_image_file(p_file, "person")
             _, doc_img_path = save_image_file(d_file, "document")
 
-    # 2. Check JSON payload
     if not person_img_path or not doc_img_path:
         req_json = request.get_json(silent=True) or {}
         person_img_path = req_json.get("person_path") or req_json.get("person_image")
         doc_img_path = req_json.get("document_path") or req_json.get("document_image")
 
-    # 3. Check Form / Query parameters
     if not person_img_path:
         person_img_path = request.form.get("person_path") or request.args.get("person_path")
     if not doc_img_path:
         doc_img_path = request.form.get("document_path") or request.args.get("document_path")
 
-    # 4. Fallback to latest uploads
     if not person_img_path:
         person_img_path = latest_uploads.get("person")
     if not doc_img_path:
         doc_img_path = latest_uploads.get("document")
 
-    # Validation
     if not person_img_path or not doc_img_path:
+        _log(f"Verification rejected: Missing images (person={bool(person_img_path)}, doc={bool(doc_img_path)})")
         return jsonify({
             "error": "Both person image and document image are required for verification.",
             "missing": {
                 "person_image": not bool(person_img_path),
                 "document_image": not bool(doc_img_path)
             },
-            "hint": "Upload images first via /upload (with type=person and type=document) or pass person_path and document_path."
+            "hint": "Upload images first via /upload or pass person_path and document_path."
         }), 400
 
     if not os.path.exists(person_img_path):
+        _log(f"Person image does not exist: {person_img_path}")
         return jsonify({"error": f"Person image file does not exist: {person_img_path}"}), 404
     if not os.path.exists(doc_img_path):
+        _log(f"Document image does not exist: {doc_img_path}")
         return jsonify({"error": f"Document image file does not exist: {doc_img_path}"}), 404
 
-    # Optional model configuration parameters
-    model_name = request.args.get("model_name") or (request.json.get("model_name") if request.is_json else None) or "Facenet512"
-    detector_backend = request.args.get("detector_backend") or (request.json.get("detector_backend") if request.is_json else None) or "opencv"
-    distance_metric = request.args.get("distance_metric") or (request.json.get("distance_metric") if request.is_json else None) or "euclidean_l2"
+    model_name = request.args.get("model_name") or (request.json.get("model_name") if request.is_json else None) or "buffalo_l"
+    detector_backend = request.args.get("detector_backend") or (request.json.get("detector_backend") if request.is_json else None) or "retinaface"
+    distance_metric = request.args.get("distance_metric") or (request.json.get("distance_metric") if request.is_json else None) or "cosine"
     enforce_detection = request.args.get("enforce_detection", "true").lower() != "false"
-    
+
     face_strictness = request.args.get("face_strictness") or (request.json.get("face_strictness") if request.is_json else None)
-    face_strictness = int(face_strictness) if face_strictness is not None else 50
+    face_strictness = int(face_strictness) if face_strictness is not None else 20
+
+    _log(f"Dispatching FaceVerification: model={model_name}, strictness={face_strictness}")
 
     try:
         verifier = FaceVerification(
@@ -292,6 +330,8 @@ def verify_photo():
             "verification": result
         }
 
+        _log(f"Face verification complete: match={result.get('is_match')}, trust_score={result.get('trust_score')}")
+
         return jsonify({
             "status": "success",
             "verification": result,
@@ -306,6 +346,7 @@ def verify_photo():
         }), 200
 
     except Exception as e:
+        _log(f"ERROR in /verify_photo: {e}")
         return jsonify({
             "status": "error",
             "error": str(e)
@@ -314,46 +355,39 @@ def verify_photo():
 
 @app.route("/extract_text", methods=["POST", "GET"])
 def extract_text():
-    """
-    Extracts text from the latest uploaded document image.
-    Accepts:
-    - JSON payload: {"document_path": "...", "type": "passport"}
-    - Form/Query params: 'document_path', 'type'
-    - Or falls back to the most recently uploaded 'document' image.
-    """
+    _log("Processing /extract_text request...")
     if DocumentOCR is None:
+        _log("ERROR: DocumentOCR module not loaded.")
         return jsonify({
             "error": "DocumentOCR module is not available. Please ensure dependencies are installed."
         }), 500
 
     doc_img_path = None
-    
-    # 1. Direct file upload inside /extract_text
+
     if "document" in request.files:
         d_file = request.files["document"]
         if d_file.filename:
             _, doc_img_path = save_image_file(d_file, "document")
 
-    # 2. Check JSON payload
     if not doc_img_path:
         req_json = request.get_json(silent=True) or {}
         doc_img_path = req_json.get("document_path") or req_json.get("document_image")
 
-    # 3. Check Form / Query parameters
     if not doc_img_path:
         doc_img_path = request.form.get("document_path") or request.args.get("document_path")
 
-    # 4. Fallback to latest uploads
     if not doc_img_path:
         doc_img_path = latest_uploads.get("document")
 
     if not doc_img_path:
+        _log("Extract text rejected: No document image provided.")
         return jsonify({
             "error": "Document image is required for OCR.",
             "hint": "Upload a document image first."
         }), 400
 
     if not os.path.exists(doc_img_path):
+        _log(f"Document image file does not exist: {doc_img_path}")
         return jsonify({"error": f"Document image file does not exist: {doc_img_path}"}), 404
 
     doc_type = (
@@ -367,9 +401,11 @@ def extract_text():
         or (request.json.get("doc_type") or request.json.get("type") or request.json.get("q") if request.is_json else None)
         or "passport"
     )
-    
+
     ocr_strictness = request.args.get("ocr_strictness") or (request.json.get("ocr_strictness") if request.is_json else None)
-    ocr_strictness = int(ocr_strictness) if ocr_strictness is not None else 50
+    ocr_strictness = int(ocr_strictness) if ocr_strictness is not None else 90
+
+    _log(f"Running DocumentOCR: path={doc_img_path}, type={doc_type}, strictness={ocr_strictness}")
 
     try:
         global latest_ocr_result
@@ -377,20 +413,27 @@ def extract_text():
         result = ocr.process_document(doc_img_path, doc_type=doc_type, strictness=ocr_strictness)
 
         if result.get("status") == "error":
+            _log(f"DocumentOCR returned error: {result.get('error')}")
             return jsonify(result), 500
 
         # Auto-validate with Module 2 if available
         if DocumentValidator is not None:
             try:
+                _log("Auto-validating extracted OCR data with Module 2 DocumentValidator...")
                 validator = DocumentValidator()
-                result["validation"] = validator.validate_document(result)
+                validation_res = validator.validate_document(result)
+                result["validation"] = validation_res
+                _log(f"Document validation completed: score={validation_res.get('score')}, status={validation_res.get('status')}")
             except Exception as val_err:
+                _log(f"Warning during auto-validation: {val_err}")
                 result["validation_warning"] = str(val_err)
 
         latest_ocr_result = result
+        _log("/extract_text completed successfully (HTTP 200)")
         return jsonify(result), 200
 
     except Exception as e:
+        _log(f"ERROR in /extract_text: {e}")
         return jsonify({
             "status": "error",
             "error": str(e)
@@ -399,14 +442,9 @@ def extract_text():
 
 @app.route("/validate_document", methods=["POST", "GET"])
 def validate_doc_endpoint():
-    """
-    Validates document data against official formatting and standards (Module 2).
-    Accepts:
-    - JSON payload: {"extracted_fields": {...}, "document_type": "passport", "mrz_parsed": {...}}
-    - Or flat JSON: {"document_type": "passport", "name": "...", "passport_number": "...", ...}
-    - Or falls back to the most recently generated OCR result from /extract_text.
-    """
+    _log("Processing /validate_document request...")
     if DocumentValidator is None:
+        _log("ERROR: DocumentValidator module not loaded.")
         return jsonify({
             "error": "DocumentValidator module is not available."
         }), 500
@@ -414,19 +452,18 @@ def validate_doc_endpoint():
     data = None
     doc_type = request.args.get("doc_type") or request.args.get("type")
 
-    # 1. Check JSON body
     if request.is_json:
         data = request.get_json(silent=True)
 
-    # 2. Check Form Data
     if not data and request.form:
         data = request.form.to_dict()
 
-    # 3. Fallback to latest OCR result
     if not data:
         if latest_ocr_result is not None:
+            _log("Using cached latest_ocr_result for validation")
             data = latest_ocr_result
         else:
+            _log("Validation rejected: No document data available")
             return jsonify({
                 "error": "No document data provided to validate.",
                 "hint": "Run /extract_text first, or pass JSON data containing document fields."
@@ -435,12 +472,14 @@ def validate_doc_endpoint():
     try:
         validator = DocumentValidator()
         result = validator.validate_document(data, doc_type=doc_type)
+        _log(f"Validation successful: status={result.get('status')}, score={result.get('score')}")
         return jsonify({
             "status": "success",
             "validation": result
         }), 200
 
     except Exception as e:
+        _log(f"ERROR in /validate_document: {e}")
         return jsonify({
             "status": "error",
             "error": str(e)
@@ -449,15 +488,9 @@ def validate_doc_endpoint():
 
 @app.route("/consolidate_score", methods=["POST", "GET"])
 def consolidate_score_endpoint():
-    """
-    Combines Module 4 (Face Verification) and Module 2 (Document Validation) scores
-    using transparent category weights (Biometric Face 45%, Document Security 35%, Standards 20%).
-    
-    Accepts:
-    - JSON payload: {"face_data": {...}, "doc_data": {...}, "weights": {...}}
-    - Or falls back to the most recently generated verification results.
-    """
+    _log("Processing /consolidate_score request...")
     if consolidate_pipeline_scores is None:
+        _log("ERROR: Consolidated risk scoring engine not loaded.")
         return jsonify({
             "error": "Consolidated risk scoring engine is not available."
         }), 500
@@ -467,6 +500,7 @@ def consolidate_score_endpoint():
     doc_data = payload.get("doc_data") or payload.get("doc") or payload.get("document") or latest_ocr_result
 
     if not face_data or not doc_data:
+        _log(f"Consolidation rejected: Missing data (face={bool(face_data)}, doc={bool(doc_data)})")
         return jsonify({
             "error": "Both face verification data and document validation data are required.",
             "hint": "Run /verify_photo and /extract_text first, or pass face_data and doc_data in the JSON body."
@@ -481,11 +515,13 @@ def consolidate_score_endpoint():
             weights=payload.get("weights"),
             audit_log_path=audit_path
         )
+        _log(f"Consolidation complete: score={consolidated.get('consolidated_score')}, suspicious_points={len(consolidated.get('suspicious_points', []))}")
         return jsonify({
             "status": "success",
             "consolidated": consolidated
         }), 200
     except Exception as e:
+        _log(f"ERROR in /consolidate_score: {e}")
         return jsonify({
             "status": "error",
             "error": str(e)
@@ -494,19 +530,12 @@ def consolidate_score_endpoint():
 
 @app.route("/uploads/<quantifier>/<filename>", methods=["GET"])
 def get_uploaded_image(quantifier, filename):
-    """
-    Serves uploaded images.
-    """
     if quantifier not in UPLOAD_DIRS:
         return jsonify({"error": "Invalid quantifier directory"}), 404
     return send_from_directory(str(UPLOAD_DIRS[quantifier]), filename)
 
 
 def get_or_create_ssl_cert() -> tuple[str, str]:
-    """
-    Generates or loads a self-signed SSL certificate for local LAN / mobile camera usage.
-    Mobile browsers (Android Chrome, iOS Safari) strictly require HTTPS for in-browser camera streaming.
-    """
     cert_dir = PROJECT_ROOT / "data" / "certs"
     cert_dir.mkdir(parents=True, exist_ok=True)
     cert_path = cert_dir / "cert.pem"
@@ -561,7 +590,7 @@ def get_or_create_ssl_cert() -> tuple[str, str]:
         f.write(
             key.private_bytes(
                 encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                format=serialization.PrivateFormat.PKCS8,
                 encryption_algorithm=serialization.NoEncryption(),
             )
         )
@@ -577,13 +606,18 @@ if __name__ == "__main__":
 
     if use_ssl:
         cert_path, key_path = get_or_create_ssl_cert()
-        print(f"\n🔐 Starting AlephNull Verification API with SSL (HTTPS) on port {port}...")
-        print(f"👉 Mobile In-Browser Camera URL: https://<your-machine-ip>:{port}")
-        print("   (Accept the self-signed certificate warning on your phone to unlock live camera viewfinders)\n")
-        app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False, ssl_context=(cert_path, key_path))
+        print(f"\n[STARTUP] Starting AlephNull Verification API with SSL (HTTPS) on port {port}...", flush=True)
+        print(f"[STARTUP] Mobile In-Browser Camera URL: https://<your-machine-ip>:{port}", flush=True)
+        print("[STARTUP] (Accept the self-signed certificate warning on your phone to unlock live camera viewfinders)\n", flush=True)
+
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+
+        app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False, ssl_context=context)
     else:
-        print(f"\n🌐 Starting AlephNull Verification API on http://0.0.0.0:{port}...")
-        print("💡 Note for Mobile: Android/iOS browsers disable live camera streaming on plain HTTP.")
-        print("   To open the live camera & biometric viewfinder directly in your mobile browser, run:")
-        print(f"   python api/src/main.py --ssl\n")
+        print(f"\n[STARTUP] Starting AlephNull Verification API on http://0.0.0.0:{port}...", flush=True)
+        print("[STARTUP] Note for Mobile: Android/iOS browsers disable live camera streaming on plain HTTP.", flush=True)
+        print("   To open the live camera & biometric viewfinder directly in your mobile browser, run:", flush=True)
+        print(f"   python api/src/main.py --ssl\n", flush=True)
         app.run(host="0.0.0.0", port=port, debug=True)

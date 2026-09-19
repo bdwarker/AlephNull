@@ -1,702 +1,569 @@
+"""
+AlephNull — Module 1: Document OCR Extraction Engine
+=====================================================
+High-precision Visual Inspection Zone (VIZ) and MRZ extraction using EasyOCR,
+heuristic line clustering with vertical overlap IOU, deterministic candidate formatting,
+and field key-value extraction.
+"""
+
 import os
-import cv2
-import numpy as np
-import pytesseract
+import sys
 import re
-from pathlib import Path
-from typing import Union, Dict, Any, Tuple
+import cv2
 import json
+import time
 from datetime import datetime
+from typing import Dict, Any, List, Optional
+from pathlib import Path
 
-# Tesseract path configuration for Windows
-if os.name == 'nt':
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Safe UTF-8 console output for Windows
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+import easyocr
 
-class TextRegionExtractor:
-    """Extracts text regions using Sobel gradient and morphological grouping."""
-    
-    @staticmethod
-    def extract(image: np.ndarray, strictness: int = 50) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
-        """
-        Uses Sobel gradient to detect text stroke transitions, merges text characters
-        into coherent lines/blocks, and crops the master document text area.
-        Strictness (0-100):
-            100 (strict): Small grouping kernel, tight bounding box around text.
-            0 (loose): Large grouping kernel, generous padding including whole document.
-            
-        Returns:
-            (cropped_image, crop_success, region_meta)
-        """
-        h, w = image.shape[:2]
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Sobel gradient in X direction to isolate vertical text edges
-        grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-        grad_x = cv2.convertScaleAbs(grad_x)
-        
-        # Otsu thresholding on gradient
-        _, thresh_grad = cv2.threshold(grad_x, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Calculate kernel size based on strictness slider
-        # strictness=0 -> wide kernel kw=50 (loose/big box), strictness=100 -> kw=16 (tight/strict box)
-        kw = int(50 - (strictness / 100.0) * 34)
-        kh = max(3, int(kw / 4))
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
-        connected = cv2.morphologyEx(thresh_grad, cv2.MORPH_CLOSE, kernel)
-        
-        # Find contours
-        contours, _ = cv2.findContours(connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        valid_boxes = []
-        for c in contours:
-            x, y, bw, bh = cv2.boundingRect(c)
-            # Filter out contours that touch outer image boundaries (image frame, wall, background)
-            if x <= 5 or y <= 5 or (x + bw) >= (w - 5) or (y + bh) >= (h - 5):
-                continue
-            # Text block heuristics: minimum width, height, and area
-            if bw > 25 and bh > 8 and bw * bh > 300:
-                valid_boxes.append((int(x), int(y), int(bw), int(bh)))
-                
-        if not valid_boxes:
-            region_meta = {
-                "text_boxes": [],
-                "master_crop": {"x": 0, "y": 0, "w": int(w), "h": int(h)},
-                "image_dimensions": {"width": int(w), "height": int(h)},
-                "total_regions": 0
-            }
-            return image, False, region_meta
-            
-        min_x = min(b[0] for b in valid_boxes)
-        min_y = min(b[1] for b in valid_boxes)
-        max_x = max(b[0] + b[2] for b in valid_boxes)
-        max_y = max(b[1] + b[3] for b in valid_boxes)
-        
-        # Padding scaled by strictness: loose = generous padding, strict = tight
-        pad = int((100 - strictness) * 0.4)
-        min_x = max(0, min_x - pad)
-        min_y = max(0, min_y - pad)
-        max_x = min(w, max_x + pad)
-        max_y = min(h, max_y + pad)
-        
-        cropped = image[min_y:max_y, min_x:max_x]
-        
-        region_meta = {
-            "text_boxes": [{"x": b[0], "y": b[1], "w": b[2], "h": b[3]} for b in valid_boxes],
-            "master_crop": {"x": int(min_x), "y": int(min_y), "w": int(max_x - min_x), "h": int(max_y - min_y)},
-            "image_dimensions": {"width": int(w), "height": int(h)},
-            "total_regions": len(valid_boxes)
-        }
-        return cropped, True, region_meta
+# Import MRZ Parser if available
+try:
+    from modules.doc_validation.src.mrz_parser import parse_mrz
+except ImportError:
+    try:
+        from ...doc_validation.src.mrz_parser import parse_mrz
+    except Exception:
+        parse_mrz = None
+
+# Global caches to avoid re-initializing models on every request
+_EASYOCR_READER_CACHE: Dict[str, easyocr.Reader] = {}
+_LLM_CACHE: Optional[Any] = None
+_LLM_CHECKED: bool = False
 
 
-class MRZParser:
-    """Parses and validates ICAO Doc 9303 MRZ text with error correction."""
-    
-    @staticmethod
-    def parse(text: str) -> Dict[str, Any]:
-        """Searches for and parses ID-3 passport MRZ lines or ID cards from raw OCR text."""
-        lines = [re.sub(r'\s+', '', l.upper()) for l in text.split('\n') if len(re.sub(r'\s+', '', l)) >= 20]
-        
-        extracted = {
-            "Document Type": "Passport",
-            "Name": None,
-            "Passport Number": None,
-            "Nationality": None,
-            "Date of Birth": None,
-            "Date of Expiry": None,
-            "Gender": None
-        }
-        raw_lines = {"line1": None, "line2": None}
-        check_digits = {
-            "passport_number_chk": None,
-            "dob_chk": None,
-            "expiry_chk": None,
-            "composite_chk": None
-        }
-        found_mrz = False
-        
-        # 1. Look for MRZ Line 1: P<[Country][Surname]<<[Given Names]...
-        for line in lines:
-            # Matches P< followed by country code (3 chars) and name string
-            m1 = re.search(r'P[<A-Z0-9]?([A-Z<]{3})([A-Z0-9<]{10,})', line)
-            if m1:
-                country = m1.group(1).replace('<', '')
-                name_str = m1.group(2)
-                raw_lines["line1"] = line
-                
-                # Surnames and Given Names in ICAO 9303 are separated by '<<'
-                # OCR may sometimes see '<C' or 'C<' or '<<' for the delimiter
-                sep_match = re.search(r'(?:<{2,}|<[CK]|[CK]<)', name_str)
-                if sep_match:
-                    surname_raw = name_str[:sep_match.start()]
-                    given_raw = name_str[sep_match.end():]
-                    
-                    surname = re.sub(r'[^A-Z]', '', surname_raw)
-                    # Given names may contain multiple names separated by '<'
-                    given_parts = [re.sub(r'[^A-Z]', '', p) for p in given_raw.split('<') if p]
-                    given = " ".join([p for p in given_parts if len(p) >= 1])
-                    
-                    if surname and given:
-                        extracted["Name"] = f"{surname}, {given}"
-                    elif surname:
-                        extracted["Name"] = surname
-                    elif given:
-                        extracted["Name"] = given
-                else:
-                    # Single name or fallback
-                    clean_name = re.sub(r'<+', ' ', name_str).strip()
-                    clean_name = re.sub(r'[^A-Z\s]', '', clean_name)
-                    if clean_name:
-                        extracted["Name"] = clean_name
-                    
-                if country:
-                    extracted["Nationality"] = country
-                found_mrz = True
-                break
-                
-        # 2. Look for MRZ Line 2: [PassportNo(9)][chk(1)][Country(3)][DOB(6)][chk(1)][M/F][Expiry(6)][chk(1)]...
-        for line in lines:
-            m2 = re.search(
-                r'([A-Z0-9<]{8,9})'       # Passport number (8-9 chars)
-                r'([0-9OIZSB<])'          # Passport number check digit
-                r'([A-Z<]{3})'            # Nationality
-                r'([0-9OIZSB]{6})'        # DOB YYMMDD
-                r'([0-9OIZSB<])'          # DOB check digit
-                r'([MF<])'                # Sex
-                r'([0-9OIZSB]{6})'        # Expiry YYMMDD
-                r'([0-9OIZSB<])?',        # Expiry check digit (optional)
-                line
-            )
-            if m2:
-                raw_lines["line2"] = line
-                passport_no_raw = m2.group(1).replace('<', '')
-                p_chk_raw = m2.group(2)
-                country = m2.group(3).replace('<', '')
-                dob_raw = m2.group(4)
-                dob_chk_raw = m2.group(5)
-                gender = m2.group(6)
-                exp_raw = m2.group(7)
-                exp_chk_raw = m2.group(8) or ""
-                
-                # Digit confusions error correction
-                trans = str.maketrans('OIZSB<', '012580')
-                dob_clean = dob_raw.translate(trans)
-                exp_clean = exp_raw.translate(trans)
-                
-                check_digits["passport_number_chk"] = p_chk_raw.translate(trans)
-                check_digits["dob_chk"] = dob_chk_raw.translate(trans)
-                if exp_chk_raw:
-                    check_digits["expiry_chk"] = exp_chk_raw.translate(trans)
-                
-                # Extract composite check digit from line end if present
-                trailing_digits = re.findall(r'\d+', line[-5:])
-                if trailing_digits:
-                    check_digits["composite_chk"] = trailing_digits[-1][-1]
-                
-                extracted["Passport Number"] = passport_no_raw
-                if country and not extracted["Nationality"]:
-                    extracted["Nationality"] = country
-                    
-                # Format DOB
-                yy, mm, dd = dob_clean[:2], dob_clean[2:4], dob_clean[4:6]
-                current_year_short = datetime.now().year % 100
-                year = f"19{yy}" if int(yy) > current_year_short else f"20{yy}"
-                extracted["Date of Birth"] = f"{year}-{mm}-{dd}"
-                
-                # Format Expiry
-                ey, em, ed = exp_clean[:2], exp_clean[2:4], exp_clean[4:6]
-                extracted["Date of Expiry"] = f"20{ey}-{em}-{ed}"
-                
-                extracted["Gender"] = "Male" if gender == "M" else "Female" if gender == "F" else None
-                found_mrz = True
-                break
+def _log(msg: str):
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{timestamp}] [OCR] {msg}", flush=True)
 
-        # Fallback check for line 2 with noisy prefix: Country followed by DOB, Sex, Expiry
-        if not extracted["Date of Expiry"] or not extracted["Gender"]:
-            for line in lines:
-                m2_alt = re.search(r'([A-Z]{3})([A-Z0-9]{6,7})([MF<])([A-Z0-9]{6,7})', line)
-                if m2_alt:
-                    raw_lines["line2"] = line
-                    country = m2_alt.group(1).replace('<', '')
-                    dob_raw = m2_alt.group(2)[:6]
-                    gender = m2_alt.group(3)
-                    exp_raw = m2_alt.group(4)[:6]
-                    trans = str.maketrans('OTIZSBG<', '07125860')
-                    dob_clean = dob_raw.translate(trans)
-                    exp_clean = exp_raw.translate(trans)
-                    if country and not extracted["Nationality"]:
-                        extracted["Nationality"] = country
-                    if not extracted["Date of Birth"] and dob_clean.isdigit():
-                        yy, mm, dd = dob_clean[:2], dob_clean[2:4], dob_clean[4:6]
-                        current_year_short = datetime.now().year % 100
-                        year = f"19{yy}" if int(yy) > current_year_short else f"20{yy}"
-                        extracted["Date of Birth"] = f"{year}-{mm}-{dd}"
-                    if not extracted["Date of Expiry"] and exp_clean.isdigit():
-                        ey, em, ed = exp_clean[:2], exp_clean[2:4], exp_clean[4:6]
-                        extracted["Date of Expiry"] = f"20{ey}-{em}-{ed}"
-                    if not extracted["Gender"] and gender in ['M', 'F']:
-                        extracted["Gender"] = "Male" if gender == 'M' else "Female"
-                    found_mrz = True
-                    break
-                
-        return {
-            "valid": found_mrz,
-            "fields": extracted,
-            "raw_lines": raw_lines,
-            "check_digits": check_digits
-        }
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+MODELS_DIR = PROJECT_ROOT / "modules" / "models"
+
+
+def get_local_llm():
+    """
+    Auto-detects and loads any GGUF model (e.g. Qwen2.5-1.5B/3B) from modules/models/.
+    Cached in memory to prevent reload overhead.
+    """
+    global _LLM_CACHE, _LLM_CHECKED
+    if _LLM_CHECKED:
+        return _LLM_CACHE
+
+    _LLM_CHECKED = True
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    gguf_files = list(MODELS_DIR.glob("*.gguf"))
+
+    if not gguf_files:
+        _log(f"Local LLM: No .gguf model found in {MODELS_DIR}. Running in deterministic heuristic mode.")
+        _LLM_CACHE = None
+        return None
+
+    model_file = gguf_files[0]
+    _log(f"Local LLM: Found '{model_file.name}' in modules/models/. Initializing llama-cpp-python...")
+    start_t = time.time()
+    try:
+        # pyrefly: ignore [missing-import]
+        from llama_cpp import Llama
+        _LLM_CACHE = Llama(
+            model_path=str(model_file),
+            n_ctx=1024,
+            n_threads=max(1, (os.cpu_count() or 4) - 1),
+            verbose=False
+        )
+        load_time = time.time() - start_t
+        _log(f"Local LLM ('{model_file.name}') loaded successfully in {load_time:.2f}s!")
+    except Exception as e:
+        _log(f"Warning: Could not initialize llama-cpp model ({model_file.name}): {e}")
+        _LLM_CACHE = None
+
+    return _LLM_CACHE
 
 
 class DocumentOCR:
-    """Orchestrates OpenCV text-boxing, Tesseract multi-pass OCR, and Ollama classification for Passports, National IDs, and Driving Licenses."""
-    
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def normalize_doc_type(doc_type: Any) -> str:
-        """Normalizes document type strings from URL query, form, or JSON."""
-        if not doc_type:
-            return "passport"
-        dt = str(doc_type).strip().lower().replace("-", "_").replace(" ", "_")
-        if any(x in dt for x in ["dl", "driver", "driving", "license"]):
-            return "driving_license"
-        if any(x in dt for x in ["id", "aadhaar", "national", "state", "card"]):
-            return "id_card"
-        return "passport"
-
-    def process_document(
-        self, 
-        image_path: Union[str, Path, np.ndarray], 
-        doc_type: str = "passport", 
-        strictness: int = 50,
-        **kwargs
-    ) -> Dict[str, Any]:
+    def __init__(self, languages: Optional[List[str]] = None):
         """
-        Processes document:
-        1. Sobel text region extraction based on strictness slider.
-        2. Bilateral filtering + CLAHE enhancement + Lanczos upscaling.
-        3. Multi-pass Tesseract OCR (sparse text PSM 11 + block PSM 6 + specialized pass).
-        4. Guardrail: Stops immediately if no readable text found.
-        5. Rule-based / MRZ parsing with error correction tailored to document type.
-        6. Ollama LLM classification with document-specific schema & anti-hallucination guard.
+        Initializes EasyOCR Reader with model caching and connects to local Qwen LLM if available.
+        Default to ['en'] for standard ICAO Doc 9303 documents (passports, IDs, DLs)
+        to guarantee high speed and eliminate language script incompatibility issues.
         """
-        # Handle backwards-compatibility if strictness was passed as 2nd positional argument
-        if isinstance(doc_type, (int, float)):
-            strictness = int(doc_type)
-            doc_type = kwargs.get("doc_type", "passport")
+        if languages is None:
+            # English is default; cached locally in ~/.EasyOCR/model
+            languages = ['en']
 
-        norm_type = self.normalize_doc_type(doc_type)
+        self.languages = languages
+        lang_key = "_".join(sorted(languages))
 
-        try:
-            if isinstance(image_path, np.ndarray):
-                image = image_path
-            else:
-                image = cv2.imread(str(image_path))
-            if image is None:
-                raise ValueError(f"Could not read image from {image_path}")
+        _log(f"Initializing DocumentOCR engine (requested languages: {languages})")
 
-            # 1. Text Region Cropping with Strictness Slider
-            cropped, crop_success, region_meta = TextRegionExtractor.extract(image, strictness)
-            
-            # 2. Preprocessing: Upscale if resolution is modest (optimal character height for Tesseract is ~30px)
-            ch, cw = cropped.shape[:2]
-            scale = 2.0 if cw <= 1600 else 1.0
-            if scale != 1.0:
-                scaled = cv2.resize(cropped, (int(cw * scale), int(ch * scale)), interpolation=cv2.INTER_LANCZOS4)
-            else:
-                scaled = cropped.copy()
-                
-            gray = cv2.cvtColor(scaled, cv2.COLOR_BGR2GRAY)
-            
-            # Bilateral filter reduces camera noise while preserving text boundaries
-            denoised = cv2.bilateralFilter(gray, 7, 50, 50)
-            
-            # CLAHE equalizes non-uniform webcam lighting and glare
-            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-            enhanced = clahe.apply(denoised)
-            
-            # Adaptive threshold for high-contrast binarized pass
-            bin_adaptive = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 10)
-            
-            # 3. Multi-pass OCR
-            # Pass A: Sparse text layout (PSM 11) on CLAHE image
-            text_psm11 = pytesseract.image_to_string(enhanced, config='--oem 3 --psm 11').strip()
-            
-            # Pass B: Block layout (PSM 6) on adaptive threshold
-            text_psm6 = pytesseract.image_to_string(bin_adaptive, config='--oem 3 --psm 6').strip()
-            
-            # Pass C: Specialized pass (MRZ for passport, or high-contrast alphanumeric pass for ID/DL)
-            special_text = ""
-            if norm_type == "passport":
-                sh, sw = cropped.shape[:2]
-                mrz_crop = cropped[int(sh * 0.68):int(sh * 0.98), :]
-                mrz_scaled = cv2.resize(mrz_crop, (0, 0), fx=2.5, fy=2.5, interpolation=cv2.INTER_LANCZOS4)
-                mrz_gray = cv2.cvtColor(mrz_scaled, cv2.COLOR_BGR2GRAY)
-                gaussian = cv2.GaussianBlur(mrz_gray, (0, 0), 2.0)
-                mrz_unsharp = cv2.addWeighted(mrz_gray, 2.0, gaussian, -1.0, 0)
-                mrz_enh = clahe.apply(mrz_unsharp)
-                
-                special_text = pytesseract.image_to_string(
-                    mrz_enh,
-                    config='--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<'
-                ).strip()
-            else:
-                # High-contrast pass for cards (numbers, dates, names)
-                special_text = pytesseract.image_to_string(
-                    enhanced,
-                    config='--oem 3 --psm 3'
-                ).strip()
-            
-            # Merge extracted text blocks into clean combined text
-            text_passes = [t for t in [text_psm11, text_psm6, special_text] if t]
-            combined_raw_text = "\n\n".join(text_passes)
-            
-            # Initialize fields template per document type
-            if norm_type == "passport":
-                extracted_fields = {
-                    "Document Type": "Passport",
-                    "Name": None,
-                    "Passport Number": None,
-                    "Nationality": None,
-                    "Date of Birth": None,
-                    "Date of Expiry": None,
-                    "Gender": None
-                }
-            elif norm_type == "id_card":
-                extracted_fields = {
-                    "Document Type": "National ID",
-                    "Name": None,
-                    "ID Number": None,
-                    "Date of Birth": None,
-                    "Gender": None,
-                    "Nationality": None,
-                    "Address": None,
-                    "Date of Expiry": None
-                }
-            else:  # driving_license
-                extracted_fields = {
-                    "Document Type": "Driving License",
-                    "Name": None,
-                    "License Number": None,
-                    "Date of Birth": None,
-                    "Date of Expiry": None,
-                    "Issue Date": None,
-                    "Gender": None,
-                    "Blood Group": None
-                }
-
-            # 4. GUARDRAIL: Verify whether readable text exists
-            alphanumeric_count = len(re.findall(r'[a-zA-Z0-9]', combined_raw_text))
-            if alphanumeric_count < 8:
-                return {
-                    "status": "warning",
-                    "message": "No readable text detected in image. Please ensure the document is clear, flat, and well-lit.",
-                    "document_type": norm_type,
-                    "crop_successful": crop_success,
-                    "regions_identified": region_meta,
-                    "raw_text": "No text detected in document image.",
-                    "ocr_passes": {
-                        "psm11_sparse": text_psm11,
-                        "psm6_block": text_psm6,
-                        "specialized_pass": special_text
-                    },
-                    "extracted_fields": extracted_fields
-                }
-                
-            # Helper for Date parsing (DD/MM/YYYY, YYYY-MM-DD, etc.)
-            date_matches = re.findall(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', combined_raw_text)
-            valid_dates = []
-            for d in date_matches:
-                parts = d.replace('-', '/').split('/')
-                if len(parts) == 3:
-                    day, month, year = parts
-                    if len(year) == 2:
-                        year = f"20{year}" if int(year) < 50 else f"19{year}"
-                    if len(day) == 1: day = f"0{day}"
-                    if len(month) == 1: month = f"0{month}"
-                    if 1 <= int(month) <= 12 and 1 <= int(day) <= 31 and 1900 <= int(year) <= 2050:
-                        valid_dates.append(f"{year}-{month}-{day}")
-            valid_dates = sorted(list(set(valid_dates)))
-
-            # Helper for Gender
-            detected_gender = None
-            if re.search(r'\b(M|MALE)\b', combined_raw_text, re.IGNORECASE) and not re.search(r'\b(FEMALE)\b', combined_raw_text, re.IGNORECASE):
-                detected_gender = "Male"
-            elif re.search(r'\b(F|FEMALE)\b', combined_raw_text, re.IGNORECASE):
-                detected_gender = "Female"
-
-            # 5. Rule-based Extraction per Document Type
-            mrz_result = {"valid": False, "fields": {}}
-
-            if norm_type == "passport":
-                mrz_result = MRZParser.parse(combined_raw_text)
-                if mrz_result["valid"]:
-                    for k, v in mrz_result["fields"].items():
-                        if v:
-                            extracted_fields[k] = v
-                            
-                # Regex for Passport Number
-                if not extracted_fields["Passport Number"]:
-                    pp_matches = re.findall(r'\b([A-Z]\d{7,8})\b', combined_raw_text)
-                    if not pp_matches:
-                        pp_matches = re.findall(r'([A-Z]\d{6,8})', combined_raw_text)
-                    if pp_matches:
-                        extracted_fields["Passport Number"] = max(pp_matches, key=len)
-                        
-                # Regex for Nationality
-                if not extracted_fields["Nationality"]:
-                    if re.search(r'\b(IND|INDIAN|INDIA)\b', combined_raw_text, re.IGNORECASE):
-                        extracted_fields["Nationality"] = "Indian"
-                    elif re.search(r'\b(USA|AMERICAN|UNITED STATES)\b', combined_raw_text, re.IGNORECASE):
-                        extracted_fields["Nationality"] = "American"
-                    elif re.search(r'\b(GBR|BRITISH|UNITED KINGDOM)\b', combined_raw_text, re.IGNORECASE):
-                        extracted_fields["Nationality"] = "British"
-                        
-                if valid_dates:
-                    if not extracted_fields["Date of Birth"] and int(valid_dates[0][:4]) <= 2012:
-                        extracted_fields["Date of Birth"] = valid_dates[0]
-                    if not extracted_fields["Date of Expiry"] and len(valid_dates) >= 2:
-                        extracted_fields["Date of Expiry"] = valid_dates[-1]
-
-                if not extracted_fields["Gender"] and detected_gender:
-                    extracted_fields["Gender"] = detected_gender
-
-            elif norm_type == "id_card":
-                # Check for Aadhaar 12-digit number (e.g. 1234 5678 9012)
-                aadhaar_match = re.search(r'\b(\d{4}\s\d{4}\s\d{4})\b', combined_raw_text)
-                if aadhaar_match:
-                    extracted_fields["ID Number"] = aadhaar_match.group(1)
-                else:
-                    # Generic 10-14 digit ID or alphanumeric ID
-                    gen_id = re.search(r'\b([A-Z0-9]{9,14})\b', combined_raw_text)
-                    if gen_id and not any(w in gen_id.group(1) for w in ["GOVERNMENT", "AUTHORITY"]):
-                        extracted_fields["ID Number"] = gen_id.group(1)
-
-                if valid_dates:
-                    extracted_fields["Date of Birth"] = valid_dates[0]
-                    if len(valid_dates) >= 2:
-                        extracted_fields["Date of Expiry"] = valid_dates[-1]
-
-                # Year of birth fallback
-                if not extracted_fields["Date of Birth"]:
-                    yob = re.search(r'(?:Year of Birth|YOB)[:\s]*(\d{4})', combined_raw_text, re.IGNORECASE)
-                    if yob:
-                        extracted_fields["Date of Birth"] = f"{yob.group(1)}-01-01"
-
-                if detected_gender:
-                    extracted_fields["Gender"] = detected_gender
-
-                if re.search(r'\b(INDIA|INDIAN|GOVERNMENT OF INDIA|AADHAAR)\b', combined_raw_text, re.IGNORECASE):
-                    extracted_fields["Nationality"] = "Indian"
-
-            elif norm_type == "driving_license":
-                # Indian / International DL Number patterns (e.g. TS09 20210012345 or DL-0420110012345)
-                dl_match = re.search(r'\b([A-Z]{2}[-\s]?\d{2,3}[-\s]?\d{4,11})\b', combined_raw_text)
-                if dl_match:
-                    extracted_fields["License Number"] = dl_match.group(1).replace(" ", "-")
-                else:
-                    gen_dl = re.search(r'\b([A-Z0-9]{8,15})\b', combined_raw_text)
-                    if gen_dl:
-                        extracted_fields["License Number"] = gen_dl.group(1)
-
-                if valid_dates:
-                    extracted_fields["Date of Birth"] = valid_dates[0]
-                    if len(valid_dates) >= 2:
-                        extracted_fields["Date of Expiry"] = valid_dates[-1]
-                    if len(valid_dates) >= 3:
-                        extracted_fields["Issue Date"] = valid_dates[1]
-
-                if detected_gender:
-                    extracted_fields["Gender"] = detected_gender
-
-                # Blood group (A+, B+, AB+, O+, etc.)
-                bg = re.search(r'\b(A|B|AB|O)[+-]\b', combined_raw_text, re.IGNORECASE)
-                if bg:
-                    extracted_fields["Blood Group"] = bg.group(0).upper()
-
-            # 6. AI Document Parser & OCR Error Corrector via Ollama
+        global _EASYOCR_READER_CACHE
+        if lang_key in _EASYOCR_READER_CACHE:
+            _log(f"Reusing cached EasyOCR Reader for: {languages}")
+            self.reader = _EASYOCR_READER_CACHE[lang_key]
+        else:
+            _log(f"Loading EasyOCR models into memory (gpu=True if available)...")
+            start_t = time.time()
             try:
-                import ollama
-                
-                if norm_type == "passport":
-                    ai_prompt = f"""
-You are an expert AI Document Parser and OCR Error Corrector specialized in PASSPORTS.
-You are given raw, noisy OCR text extracted from a passport scan, along with preliminary regex detections.
-Webcam photos often cause optical character recognition (OCR) errors such as:
-- Character substitutions: 'W', 'RM', 'NN' instead of 'H' (e.g. 'MOWAMMAD' -> 'MOHAMMAD'); 'O' vs '0', 'I' vs '1', 'S' vs '5', 'B' vs '8', 'Z' vs '2'.
-- Split characters or punctuation: e.g. '14/02 /2:.97' -> 2007-02-14.
-- MRZ lines at the bottom:
-  Line 1: P<[Country][Surname]<<[Given Names]... (e.g. 'P<INDSHAAN<<MOWAMMAD' -> Surname: SHAAN, Given: MOHAMMAD)
-  Line 2: [Passport No][chk][Country][DOB YYMMDD][chk][Sex M/F][Expiry YYMMDD]...
-
-Instructions:
-1. REPAIR the "Name": Fix OCR typos in the surname and given names. Format as "Given Name Surname" or "Surname, Given Name".
-2. RECONCILE "Passport Number": Combine visual header number and MRZ digits (e.g. letter 'T' followed by 7-8 digits like T9308191).
-3. EXPAND "Nationality": Convert 3-letter country code or text to standard name (e.g. 'IND' -> 'Indian', 'USA' -> 'American').
-4. NORMALIZE "Date of Birth": Reconcile visual date and MRZ date into strictly YYYY-MM-DD.
-5. NORMALIZE "Date of Expiry": Strictly YYYY-MM-DD.
-6. NORMALIZE "Gender": "Male" or "Female".
-
-SECURITY & ANTI-HALLUCINATION RULES:
-- All corrections MUST be grounded in clues, names, and tokens present in the OCR text or MRZ. DO NOT fabricate arbitrary placeholder people (never output 'John Smith', 'John Doe', '123456789', etc.).
-- If a field has no evidence in the text, set its value to null.
-- Output ONLY a valid JSON object matching these exact keys:
-  "Name", "Passport Number", "Nationality", "Date of Birth", "Date of Expiry", "Gender"
-
-Preliminary Detections:
-{json.dumps(extracted_fields, indent=2)}
-
-Raw OCR Text:
-{combined_raw_text}
-"""
-                elif norm_type == "id_card":
-                    ai_prompt = f"""
-You are an expert AI Document Parser and OCR Error Corrector specialized in NATIONAL ID / GOVERNMENT ID CARDS (e.g. Aadhaar Card, National Identity Card, Voter ID, State ID).
-You are given raw, noisy OCR text extracted from an ID card scan, along with preliminary regex detections.
-Webcam photos often cause optical character recognition (OCR) errors such as:
-- Character substitutions: 'O' vs '0', 'I' vs '1', 'S' vs '5', 'B' vs '8', 'Z' vs '2', 'W'/'RM' vs 'H'.
-- Number grouping: e.g. '3456 7890 1234' or '345678901234'.
-- Header noise: Ignore 'Government of India', 'Unique Identification Authority', 'Republic of...', etc.
-
-Instructions:
-1. EXTRACT & REPAIR "Name": Identify the cardholder's full name (fix OCR typos; ignore government headers or parentage labels like 'S/O', 'D/O').
-2. EXTRACT "ID Number": Identify the unique national ID number (e.g. 12-digit Aadhaar 'XXXX XXXX XXXX' or alphanumeric ID).
-3. EXTRACT "Date of Birth": Reconcile visual date or year into strictly YYYY-MM-DD (e.g. 2007-02-14).
-4. EXTRACT "Gender": "Male" or "Female".
-5. EXTRACT "Nationality": e.g. "Indian", "American", etc. (or null if unspecified).
-6. EXTRACT "Address": If address, state, or PIN is visible, format cleanly (or null).
-7. EXTRACT "Date of Expiry": If an expiry date exists, format as YYYY-MM-DD (or null).
-
-SECURITY & ANTI-HALLUCINATION RULES:
-- All corrections MUST be grounded in clues, names, and tokens present in the OCR text. DO NOT fabricate arbitrary placeholder people (never output 'John Smith', 'John Doe', '123456789', etc.).
-- If a field has no evidence in the text, set its value to null.
-- Output ONLY a valid JSON object matching these exact keys:
-  "Name", "ID Number", "Date of Birth", "Gender", "Nationality", "Address", "Date of Expiry"
-
-Preliminary Detections:
-{json.dumps(extracted_fields, indent=2)}
-
-Raw OCR Text:
-{combined_raw_text}
-"""
-                else:  # driving_license
-                    ai_prompt = f"""
-You are an expert AI Document Parser and OCR Error Corrector specialized in DRIVING LICENSES (DL).
-You are given raw, noisy OCR text extracted from a driving license scan, along with preliminary regex detections.
-Webcam photos often cause optical character recognition (OCR) errors such as:
-- Character substitutions: 'O' vs '0', 'I' vs '1', 'S' vs '5', 'B' vs '8', 'Z' vs '2'.
-- Split letters or dates: e.g. '14/02 /2025' -> 2025-02-14.
-
-Instructions:
-1. EXTRACT & REPAIR "Name": Full name of the license holder.
-2. EXTRACT "License Number": Driving license number (e.g. 'TS09 20210012345' or state/country specific alphanumeric format).
-3. EXTRACT "Date of Birth": Format strictly as YYYY-MM-DD.
-4. EXTRACT "Date of Expiry": Validity / Valid Till date formatted strictly as YYYY-MM-DD.
-5. EXTRACT "Issue Date": Date of issuance formatted strictly as YYYY-MM-DD (or null).
-6. EXTRACT "Gender": "Male" or "Female" (or null if not specified).
-7. EXTRACT "Blood Group": e.g. 'O+', 'B+', 'A+', 'AB-', etc. (or null).
-
-SECURITY & ANTI-HALLUCINATION RULES:
-- All corrections MUST be grounded in clues, names, and tokens present in the OCR text. DO NOT fabricate arbitrary placeholder people (never output 'John Smith', 'John Doe', '123456789', etc.).
-- If a field has no evidence in the text, set its value to null.
-- Output ONLY a valid JSON object matching these exact keys:
-  "Name", "License Number", "Date of Birth", "Date of Expiry", "Issue Date", "Gender", "Blood Group"
-
-Preliminary Detections:
-{json.dumps(extracted_fields, indent=2)}
-
-Raw OCR Text:
-{combined_raw_text}
-"""
-                response = ollama.chat(model='qwen2.5:1.5b', messages=[
-                    {'role': 'user', 'content': ai_prompt}
-                ])
-                content = response['message']['content']
-                
-                if '{' in content and '}' in content:
-                    json_str = content[content.find('{'):content.rfind('}')+1]
-                    llm_data = json.loads(json_str)
-                    
-                    hallucination_blacklist = {
-                        "smith, john", "john smith", "smith", "john doe", "jane doe", 
-                        "123456789", "a1234567", "sample", "placeholder", "dl-0123456789012"
-                    }
-                    
-                    for k in extracted_fields.keys():
-                        if k == "Document Type":
-                            continue
-                        val = llm_data.get(k)
-                        if val and isinstance(val, str):
-                            clean_val = val.strip()
-                            if clean_val.lower() in hallucination_blacklist:
-                                continue
-                            if "date" in k.lower() or "birth" in k.lower() or "expiry" in k.lower():
-                                m_date = re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', clean_val)
-                                if m_date:
-                                    clean_val = f"{m_date.group(1)}-{int(m_date.group(2)):02d}-{int(m_date.group(3)):02d}"
-                                elif re.match(r'^\d{8}$', clean_val):
-                                    clean_val = f"{clean_val[:4]}-{clean_val[4:6]}-{clean_val[6:8]}"
-                                else:
-                                    continue
-                            extracted_fields[k] = clean_val
-                            
-                # Post-normalization for passport number
-                if norm_type == "passport" and extracted_fields.get("Passport Number"):
-                    pp = re.sub(r'[^A-Z0-9]', '', str(extracted_fields["Passport Number"]).upper())
-                    if len(pp) > 8 and pp[0].isalpha():
-                        extracted_fields["Passport Number"] = pp[:8]
-                    else:
-                        extracted_fields["Passport Number"] = pp
-
-                # If MRZ parsed a valid expiry date, prioritize the standardized MRZ value
-                if norm_type == "passport" and mrz_result.get("fields", {}).get("Date of Expiry"):
-                    extracted_fields["Date of Expiry"] = mrz_result["fields"]["Date of Expiry"]
-                            
+                # Try GPU first; easyocr automatically falls back to CPU if CUDA unavailable
+                self.reader = easyocr.Reader(self.languages, gpu=True)
             except Exception as e:
-                print(f"Ollama classification warning: {e}")
-                    
-            return {
-                "status": "success",
-                "document_type": norm_type,
-                "crop_successful": crop_success,
-                "regions_identified": region_meta,
-                "raw_text": combined_raw_text,
-                "ocr_passes": {
-                    "psm11_sparse": text_psm11,
-                    "psm6_block": text_psm6,
-                    "specialized_pass": special_text
-                },
-                "mrz_parsed": mrz_result if norm_type == "passport" else None,
-                "extracted_fields": extracted_fields
-            }
-            
+                _log(f"Warning: GPU init encountered: {e}. Retrying with gpu=False...")
+                self.reader = easyocr.Reader(self.languages, gpu=False)
+
+            load_time = time.time() - start_t
+            _EASYOCR_READER_CACHE[lang_key] = self.reader
+            _log(f"EasyOCR Reader initialized successfully in {load_time:.2f}s.")
+
+        # Initialize local Qwen LLM if downloaded
+        self.llm = get_local_llm()
+
+    def cluster_words_into_lines(self, words: List[Dict], vertical_iou_threshold: float = 0.45) -> List[List[Dict]]:
+        """
+        Groups OCR word bounding boxes into coherent text lines using dynamic vertical overlap.
+        """
+        if not words:
+            return []
+
+        # Sort words top-to-bottom, then left-to-right
+        sorted_words = sorted(words, key=lambda w: (min(p[1] for p in w['box']), min(p[0] for p in w['box'])))
+        lines: List[List[Dict]] = []
+
+        for word in sorted_words:
+            w_box = word['box']
+            w_top = min(p[1] for p in w_box)
+            w_bot = max(p[1] for p in w_box)
+            w_height = max(1, w_bot - w_top)
+
+            matched_line = None
+            for line in lines:
+                line_top = min(min(p[1] for p in item['box']) for item in line)
+                line_bot = max(max(p[1] for p in item['box']) for item in line)
+                line_height = max(1, line_bot - line_top)
+
+                intersection = max(0, min(w_bot, line_bot) - max(w_top, line_top))
+                min_height = min(w_height, line_height)
+                overlap_ratio = intersection / min_height if min_height > 0 else 0
+
+                if overlap_ratio >= vertical_iou_threshold:
+                    matched_line = line
+                    break
+
+            if matched_line is not None:
+                matched_line.append(word)
+            else:
+                lines.append([word])
+
+        # Sort words within each line left-to-right
+        for line in lines:
+            line.sort(key=lambda w: min(p[0] for p in w['box']))
+
+        return lines
+
+    def _generate_candidates(self, text: str) -> List[str]:
+        """
+        Deterministic candidate generator for common OCR errors (e.g., 4<->A, 0<->O, 1<->I).
+        """
+        candidates = [text]
+        replacements = {'4': 'A', '0': 'O', '1': 'I', '8': 'B', '5': 'S'}
+        for k, v in replacements.items():
+            if k in text:
+                candidates.append(text.replace(k, v))
+            if v in text:
+                candidates.append(text.replace(v, k))
+        return list(set(candidates))
+
+    def disambiguate_with_llm(self, field: str, candidates: List[str], context: str = "") -> str:
+        """
+        Uses local Qwen LLM via llama.cpp for bounded candidate disambiguation.
+        If LLM is not loaded or candidates list has only one item, returns candidates[0].
+        """
+        if not candidates:
+            return ""
+        if len(candidates) == 1 or not getattr(self, "llm", None):
+            return candidates[0]
+
+        _log(f"Running Qwen bounded disambiguation for field '{field}' across candidates: {candidates}")
+        prompt = (
+            f"<|im_start|>system\n"
+            f"You are a strict border document OCR verification assistant. "
+            f"Choose the single most realistic and standard value for the field '{field}' "
+            f"from the candidate list based on the document context. "
+            f"Output ONLY the exact selected candidate text without explanation.<|im_end|>\n"
+            f"<|im_start|>user\n"
+            f"Candidates: {candidates}\n"
+            f"Context: {context}\n"
+            f"Selected Candidate:<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+        try:
+            output = self.llm(
+                prompt,
+                max_tokens=24,
+                stop=["<|im_end|>", "\n"],
+                temperature=0.1
+            )
+            raw_choice = output["choices"][0]["text"].strip()
+            for c in candidates:
+                if c.lower() == raw_choice.lower():
+                    _log(f"Qwen disambiguated '{field}': '{c}'")
+                    return c
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return {
-                "status": "error",
-                "document_type": norm_type,
-                "error": str(e)
-            }
+            _log(f"Warning during Qwen LLM disambiguation: {e}")
+
+        return candidates[0]
+
+    def _detect_mrz_lines(self, lines: List[List[Dict]]) -> List[str]:
+        """
+        Detects Machine Readable Zone lines (lines with frequent '<' symbols, P<, I<, etc.)
+        """
+        candidate_mrz = []
+        for line in lines:
+            line_str = "".join([w['text'] for w in line]).replace(" ", "").upper()
+            clean_mrz = re.sub(r'[^A-Z0-9<]', '', line_str)
+            # MRZ lines typically have multiple '<' chars or start with P< / I< / V<
+            if clean_mrz.count('<') >= 2 or clean_mrz.startswith(('P<', 'I<', 'V<', 'A<', 'C<')):
+                if len(clean_mrz) >= 28:  # Minimum valid MRZ line length
+                    candidate_mrz.append(clean_mrz)
+
+        # Return bottom-most candidate lines (MRZ is located at the bottom)
+        return candidate_mrz[-2:] if len(candidate_mrz) >= 2 else candidate_mrz
+
+    def _extract_fields(self, lines: List[List[Dict]], doc_type: str = "passport") -> Dict[str, Any]:
+        """
+        Heuristic extraction of key identity document fields from clustered lines.
+        Supports Passports, National ID / Aadhaar cards, and Driving Licenses.
+        """
+        fields: Dict[str, Any] = {}
+        all_lines_text = [" ".join([w['text'] for w in line]).strip() for line in lines]
+
+        for idx, line_text in enumerate(all_lines_text):
+            upper = line_text.upper()
+
+            # 1. Aadhaar 12-digit number (e.g., "5820 1682 3077")
+            aadhaar_match = re.search(r'\b(\d{4}\s\d{4}\s\d{4})\b', line_text)
+            if aadhaar_match:
+                fields["Document Number"] = aadhaar_match.group(1)
+
+            # 2. Gender / Sex detection
+            if re.search(r'\b(MALE|FEMALE)\b', upper):
+                g_val = "Male" if "MALE" in upper else "Female"
+                fields["Gender"] = g_val
+
+            # 3. Date of Birth (DOB)
+            if "DOB" in upper or "BIRTH" in upper:
+                # Check for standard date formats: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD
+                date_match = re.search(r'\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b', upper)
+                if date_match:
+                    fields["Date of Birth"] = date_match.group(1)
+                else:
+                    # Fallback for OCR merged digits (e.g. 14022007)
+                    digits = re.sub(r'\D', '', upper)
+                    if len(digits) >= 8:
+                        d_str = digits[-8:]
+                        formatted_d = f"{d_str[:2]}/{d_str[2:4]}/{d_str[4:]}"
+                        fields["Date of Birth"] = formatted_d
+
+                # Look behind for Name: On Indian IDs (Aadhaar), the line directly before DOB is the holder's Name
+                if idx > 0 and "Full Name" not in fields:
+                    prev_line = all_lines_text[idx - 1].strip()
+                    if re.match(r'^[A-Za-z\s\.\'-]{3,40}$', prev_line):
+                        if not any(k in prev_line.upper() for k in ["GOV", "INDIA", "AUTHORITY", "AADHAAR", "ENROL", "HELP"]):
+                            fields["Full Name"] = prev_line
+
+            # 4. Standard Name / Surname labels (Passports, Driving Licenses)
+            if any(k in upper for k in ["NAME", "SURNAME", "GIVEN NAME", "FULL NAME", "HOLDER"]):
+                if idx + 1 < len(all_lines_text) and "Full Name" not in fields:
+                    val = all_lines_text[idx + 1].strip()
+                    if val and not any(k in val.upper() for k in ["DATE", "SEX", "PASSPORT", "NATIONAL", "GOVT"]):
+                        cands = self._generate_candidates(val)
+                        val = self.disambiguate_with_llm("name", cands, context=upper)
+                        fields["Full Name"] = val
+
+            # 5. Passport Number / Document Number labels
+            if any(k in upper for k in ["PASSPORT NO", "PASSPORT NUMBER", "DOC NO", "DOCUMENT NO", "DL NO", "LICENSE NO"]):
+                match = re.search(r'[A-Z0-9]{7,15}', upper)
+                if match:
+                    raw_val = match.group(0)
+                    cands = self._generate_candidates(raw_val)
+                    val = self.disambiguate_with_llm("document_number", cands, context=upper)
+                    fields["Document Number"] = val
+                elif idx + 1 < len(all_lines_text):
+                    next_val = all_lines_text[idx + 1].strip()
+                    match_next = re.search(r'[A-Z0-9]{7,15}', next_val.upper())
+                    if match_next:
+                        raw_val = match_next.group(0)
+                        cands = self._generate_candidates(raw_val)
+                        val = self.disambiguate_with_llm("document_number", cands, context=next_val)
+                        fields["Document Number"] = val
+
+            # 6. Expiry Date
+            if any(k in upper for k in ["EXPIRY", "EXPIRATION", "VALID UNTIL", "VALID TILL"]):
+                date_match = re.search(r'\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b', upper)
+                if date_match:
+                    fields["Date of Expiry"] = date_match.group(1)
+                elif idx + 1 < len(all_lines_text):
+                    next_match = re.search(r'\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b', all_lines_text[idx + 1].upper())
+                    if next_match:
+                        fields["Date of Expiry"] = next_match.group(1)
+
+            # 7. Nationality
+            if any(k in upper for k in ["NATIONALITY", "CITIZENSHIP"]):
+                nat_match = re.search(r'\b([A-Z]{3})\b', upper)
+                if nat_match:
+                    fields["Nationality"] = nat_match.group(1)
+
+        return fields
+
+    def process_document(self, image_path: str, doc_type: str = "passport", strictness: int = 90) -> Dict[str, Any]:
+        """
+        Reads document, performs VIZ OCR, clusters lines, extracts fields, and validates MRZ.
+        """
+        start_time = time.time()
+        _log("=" * 60)
+        _log(f"STARTING OCR EXTRACTION")
+        _log(f"Document Image: {image_path}")
+        _log(f"Document Type : {doc_type} | Strictness: {strictness}")
+
+        if not os.path.exists(image_path):
+            _log(f"ERROR: Image file not found at {image_path}")
+            return {"status": "error", "error": f"Image file not found: {image_path}"}
+
+        # 1. Read Image or PDF
+        if str(image_path).lower().endswith(".pdf"):
+            _log(f"PDF document detected: {image_path}. Rendering page 1 via pypdfium2...")
+            pdf = None
+            try:
+                import pypdfium2 as pdfium
+                import numpy as np
+                pdf = pdfium.PdfDocument(image_path)
+                if len(pdf) == 0:
+                    return {"status": "error", "error": "PDF has 0 pages"}
+                pil_img = pdf[0].render(scale=3.0).to_pil()
+                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            except Exception as pdf_err:
+                _log(f"ERROR rendering PDF in process_document: {pdf_err}")
+                return {"status": "error", "error": f"Failed to render PDF: {pdf_err}"}
+            finally:
+                if pdf is not None:
+                    try:
+                        pdf.close()
+                    except Exception:
+                        pass
+        else:
+            img = cv2.imread(image_path)
+
+        if img is None:
+            _log("ERROR: Could not decode document image with OpenCV")
+            return {"status": "error", "error": "Failed to read document image"}
+
+        img_h, img_w = img.shape[:2]
+        _log(f"Image loaded: {img_w}x{img_h}px, channels: {img.shape[2] if len(img.shape) > 2 else 1}")
+
+        # 2. Run EasyOCR
+        _log("Executing EasyOCR readtext()...")
+        ocr_start = time.time()
+        try:
+            raw_results = self.reader.readtext(img)
+            ocr_dur = time.time() - ocr_start
+            _log(f"EasyOCR readtext() completed in {ocr_dur:.2f}s — detected {len(raw_results)} bounding boxes")
+        except Exception as e:
+            _log(f"ERROR running EasyOCR: {e}")
+            return {"status": "error", "error": f"EasyOCR execution error: {str(e)}"}
+
+        # 3. Format Word Detections and Bounding Boxes
+        words = []
+        text_boxes = []
+        for bbox, text, prob in raw_results:
+            clean_text = text.strip()
+            if not clean_text:
+                continue
+
+            pts = [[int(p[0]), int(p[1])] for p in bbox]
+            bx = min(p[0] for p in pts)
+            by = min(p[1] for p in pts)
+            bw = max(p[0] for p in pts) - bx
+            bh = max(p[1] for p in pts) - by
+
+            words.append({
+                "box": pts,
+                "text": clean_text,
+                "confidence": round(float(prob), 4)
+            })
+            text_boxes.append({
+                "x": int(bx),
+                "y": int(by),
+                "w": int(bw),
+                "h": int(bh),
+                "text": clean_text,
+                "confidence": round(float(prob), 4)
+            })
+
+        _log(f"Filtered to {len(words)} valid non-empty text regions")
+
+        # 4. Cluster Words into Lines
+        lines = self.cluster_words_into_lines(words)
+        _log(f"Clustered words into {len(lines)} coherent horizontal text lines")
+        for i, line in enumerate(lines[:8]):  # Log first 8 lines
+            line_str = " ".join([w['text'] for w in line])
+            _log(f"  Line {i+1:02d}: \"{line_str}\"")
+        if len(lines) > 8:
+            _log(f"  ... ({len(lines) - 8} more lines)")
+
+        # 5. Extract Fields from VIZ
+        extracted_fields = self._extract_fields(lines, doc_type=doc_type)
+        _log(f"Extracted fields from VIZ: {list(extracted_fields.keys())}")
+        for k, v in extracted_fields.items():
+            if not k.startswith("_"):
+                _log(f"  > {k}: {v}")
+
+        # 6. Check and Parse MRZ
+        mrz_parsed = None
+        mrz_lines = self._detect_mrz_lines(lines)
+        if mrz_lines and parse_mrz:
+            _log(f"Found potential MRZ lines ({len(mrz_lines)} lines):")
+            for ml in mrz_lines:
+                _log(f"  MRZ RAW: {ml}")
+            try:
+                # Format to 44 characters for TD3 if needed
+                padded_lines = []
+                for ml in mrz_lines:
+                    if len(ml) < 44:
+                        ml = ml.ljust(44, '<')
+                    elif len(ml) > 44:
+                        ml = ml[:44]
+                    padded_lines.append(ml)
+
+                mrz_parsed = parse_mrz(padded_lines)
+                mrz_parsed["mrz_lines"] = padded_lines
+                _log(f"MRZ Checksum Validation verdict: valid={mrz_parsed.get('is_valid')}")
+
+                # Populate extracted fields with MRZ data (even if check-digits flagged a warning)
+                if mrz_parsed.get("surname") or mrz_parsed.get("given_names"):
+                    mrz_name = f"{mrz_parsed.get('given_names', '')} {mrz_parsed.get('surname', '')}".strip()
+                    if mrz_name and not extracted_fields.get("Full Name"):
+                        extracted_fields["Full Name"] = mrz_name
+
+                if mrz_parsed.get("document_number") and not extracted_fields.get("Document Number"):
+                    extracted_fields["Document Number"] = mrz_parsed["document_number"]
+
+                if mrz_parsed.get("dob") and not extracted_fields.get("Date of Birth"):
+                    raw_dob = str(mrz_parsed["dob"])
+                    if len(raw_dob) == 6 and raw_dob.isdigit():
+                        yy = int(raw_dob[:2])
+                        century = "19" if yy > 30 else "20"
+                        fmt_dob = f"{century}{raw_dob[:2]}-{raw_dob[2:4]}-{raw_dob[4:6]}"
+                    else:
+                        fmt_dob = raw_dob
+                    extracted_fields["Date of Birth"] = fmt_dob
+
+                if mrz_parsed.get("expiry") and not extracted_fields.get("Date of Expiry"):
+                    raw_exp = str(mrz_parsed["expiry"])
+                    if len(raw_exp) == 6 and raw_exp.isdigit():
+                        yy = int(raw_exp[:2])
+                        century = "20"
+                        fmt_exp = f"{century}{raw_exp[:2]}-{raw_exp[2:4]}-{raw_exp[4:6]}"
+                    else:
+                        fmt_exp = raw_exp
+                    extracted_fields["Date of Expiry"] = fmt_exp
+
+                if mrz_parsed.get("nationality") and not extracted_fields.get("Nationality"):
+                    extracted_fields["Nationality"] = mrz_parsed["nationality"]
+
+            except Exception as mrz_err:
+                _log(f"Warning parsing MRZ: {mrz_err}")
+
+        # 7. Local Qwen LLM Fallback if key fields are still missing
+        if getattr(self, "llm", None) and (not extracted_fields.get("Full Name") or not extracted_fields.get("Document Number")):
+            _log("Key fields missing. Running local Qwen LLM for document field extraction...")
+            try:
+                line_texts = [" ".join([w['text'] for w in l]) for l in lines]
+                llm_prompt = (
+                    f"<|im_start|>system\n"
+                    f"You are a document OCR field extractor. From these OCR lines, extract JSON with keys: "
+                    f"'name', 'document_number', 'dob', 'expiry', 'nationality'. "
+                    f"Return ONLY valid JSON with string values.<|im_end|>\n"
+                    f"<|im_start|>user\n"
+                    f"Document Lines:\n" + "\n".join(line_texts) + "\n<|im_end|>\n"
+                    f"<|im_start|>assistant\n"
+                )
+                output = self.llm(llm_prompt, max_tokens=150, temperature=0.1)
+                txt = output["choices"][0]["text"].strip()
+                if "{" in txt and "}" in txt:
+                    json_str = txt[txt.find("{"):txt.rfind("}")+1]
+                    parsed_llm = json.loads(json_str)
+                    key_map = {
+                        "name": "Full Name",
+                        "full_name": "Full Name",
+                        "full name": "Full Name",
+                        "document_number": "Document Number",
+                        "document number": "Document Number",
+                        "passport_number": "Document Number",
+                        "passport number": "Document Number",
+                        "dob": "Date of Birth",
+                        "date_of_birth": "Date of Birth",
+                        "date of birth": "Date of Birth",
+                        "expiry": "Date of Expiry",
+                        "date_of_expiry": "Date of Expiry",
+                        "date of expiry": "Date of Expiry",
+                        "nationality": "Nationality",
+                        "gender": "Gender"
+                    }
+                    for k, v in parsed_llm.items():
+                        canon_k = key_map.get(k.lower().strip(), k.title())
+                        if v and isinstance(v, str) and not extracted_fields.get(canon_k):
+                            clean_v = v.strip()
+                            if len(clean_v) > 1 and not any(bad in clean_v.upper() for bad in ["UNKNOWN", "NULL", "NONE"]):
+                                extracted_fields[canon_k] = clean_v
+            except Exception as llm_err:
+                _log(f"Warning in LLM fallback extraction: {llm_err}")
+
+        # Construct raw_text and multi-pass OCR breakdown
+        raw_lines = [" ".join([w['text'] for w in l]).strip() for l in lines]
+        raw_text = "\n".join(raw_lines) if raw_lines else "\n".join([w['text'] for w in words])
+
+        ocr_passes = {
+            "psm11_sparse": "\n".join([w['text'] for w in words]),
+            "psm6_block": raw_text
+        }
+        if mrz_lines:
+            ocr_passes["specialized_pass"] = "\n".join(mrz_lines)
+
+        # Construct full response compatible with UI overlays and downstream Module 2
+        total_time = time.time() - start_time
+        _log(f"OCR EXTRACTION FINISHED in {total_time:.2f}s ({len(words)} words, {len(raw_text)} chars)")
+        _log("=" * 60)
+
+        return {
+            "status": "success",
+            "document_type": doc_type,
+            "extracted_fields": extracted_fields,
+            "mrz_parsed": mrz_parsed,
+            "raw_text": raw_text,
+            "ocr_passes": ocr_passes,
+            "raw_ocr": words,
+            "lines_clustered": len(lines),
+            "regions_identified": {
+                "image_dimensions": {"width": img_w, "height": img_h},
+                "text_boxes": text_boxes,
+                "master_crop": {"x": 0, "y": 0, "w": img_w, "h": img_h}
+            },
+            "processing_time_ms": round(total_time * 1000, 1)
+        }
 
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="AlephNull Document OCR Module")
-    parser.add_argument("image_path", nargs="?", help="Path to document image file")
+    parser = argparse.ArgumentParser(description="AlephNull Module 1: Document OCR")
+    parser.add_argument("image", help="Path to document image file")
     parser.add_argument("--type", "-t", default="passport", choices=["passport", "id_card", "driving_license"], help="Document type")
-    parser.add_argument("--strictness", "-s", type=int, default=50, help="OCR bounding strictness (0-100)")
-
+    parser.add_argument("--strictness", "-s", type=int, default=90, help="OCR strictness (0-100)")
     args = parser.parse_args()
 
-    if args.image_path:
-        ocr = DocumentOCR()
-        res = ocr.process_document(args.image_path, doc_type=args.type, strictness=args.strictness)
-        print(json.dumps(res, indent=2))
-    else:
-        print("AlephNull Document OCR Module ready.")
-        print("Usage: python main.py <document_image_path> [--type passport|id_card|driving_license] [--strictness 0-100]")
-
-
+    ocr = DocumentOCR()
+    res = ocr.process_document(args.image, doc_type=args.type, strictness=args.strictness)
+    print(json.dumps(res, indent=2))

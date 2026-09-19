@@ -129,9 +129,17 @@ def validate_id_card(data: Dict[str, Any]) -> Dict[str, Any]:
     # 3. Date of Birth & Age Check
     if dob_raw:
         try:
-            dob_clean = re.sub(r'[/.]', '-', dob_raw)
-            dob_dt = datetime.strptime(dob_clean, "%Y-%m-%d")
-            result["checks"].append({"field": "dob", "status": "CORRECT", "severity": "INFO", "reason": "Valid date of birth format"})
+            dob_clean = re.sub(r'[/.]', '-', dob_raw).strip()
+            dob_dt = None
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d-%m-%y"):
+                try:
+                    dob_dt = datetime.strptime(dob_clean, fmt)
+                    break
+                except ValueError:
+                    pass
+            if dob_dt is None:
+                raise ValueError(f"Unrecognized date format: {dob_raw}")
+            result["checks"].append({"field": "dob", "status": "CORRECT", "severity": "INFO", "reason": f"Valid date of birth ({dob_dt.strftime('%Y-%m-%d')})"})
             
             if dob_dt > now:
                 result["score"] -= 30
