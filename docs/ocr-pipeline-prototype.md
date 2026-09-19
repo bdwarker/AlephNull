@@ -199,6 +199,7 @@ The model receives structured candidates—**never a raw OCR text dump**—and a
 
 * **Constrained Decoding (Grammar-guided):** When served via `llama.cpp`, employ GBNF (Grammar-Based Context-Free Grammar) or JSON Schema mode so the model physically cannot emit tokens outside `candidate_hypotheses`.
 * **Zero Temperature:** Set temperature to `0.0` for deterministic, reproducible inference.
+* **Strict Output Validation:** Parse JSON against schema, and programmatically reject/repair invalid responses.
 
 ---
 
