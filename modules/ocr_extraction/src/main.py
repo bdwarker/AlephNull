@@ -533,6 +533,26 @@ class DocumentOCR:
         if mrz_lines:
             ocr_passes["specialized_pass"] = "\n".join(mrz_lines)
 
+        # 8. Check for Aadhaar QR Code
+        aadhaar_qr_parsed = None
+        if doc_type in ["aadhaar", "id_card", "national_id"]:
+            try:
+                from modules.doc_validation.src.aadhaar_qr import decode_aadhaar_qr_from_file
+                qr_res = decode_aadhaar_qr_from_file(image_path)
+                if qr_res and qr_res.get("status") == "success":
+                    _log(f"Detected and decoded Aadhaar QR code in image: {qr_res.get('qr_type')}")
+                    aadhaar_qr_parsed = qr_res
+                    if not extracted_fields.get("Full Name") and qr_res.get("name"):
+                        extracted_fields["Full Name"] = qr_res["name"]
+                    if not extracted_fields.get("Document Number") and qr_res.get("last_4_digits"):
+                        extracted_fields["Document Number"] = f"XXXX XXXX {qr_res['last_4_digits']}"
+                    if not extracted_fields.get("Date of Birth") and qr_res.get("dob"):
+                        extracted_fields["Date of Birth"] = qr_res["dob"]
+                    if not extracted_fields.get("Gender") and qr_res.get("gender"):
+                        extracted_fields["Gender"] = qr_res["gender"]
+            except Exception as qr_err:
+                _log(f"Aadhaar QR scanner note: {qr_err}")
+
         # Construct full response compatible with UI overlays and downstream Module 2
         total_time = time.time() - start_time
         _log(f"OCR EXTRACTION FINISHED in {total_time:.2f}s ({len(words)} words, {len(raw_text)} chars)")
@@ -543,6 +563,7 @@ class DocumentOCR:
             "document_type": doc_type,
             "extracted_fields": extracted_fields,
             "mrz_parsed": mrz_parsed,
+            "aadhaar_qr_parsed": aadhaar_qr_parsed,
             "raw_text": raw_text,
             "ocr_passes": ocr_passes,
             "raw_ocr": words,
@@ -560,7 +581,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="AlephNull Module 1: Document OCR")
     parser.add_argument("image", help="Path to document image file")
-    parser.add_argument("--type", "-t", default="passport", choices=["passport", "id_card", "driving_license"], help="Document type")
+    parser.add_argument("--type", "-t", default="passport", choices=["passport", "id_card", "driving_license", "aadhaar"], help="Document type")
     parser.add_argument("--strictness", "-s", type=int, default=90, help="OCR strictness (0-100)")
     args = parser.parse_args()
 

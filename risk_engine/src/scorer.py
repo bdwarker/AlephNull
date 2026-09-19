@@ -67,7 +67,7 @@ def consolidate_pipeline_scores(
 
     # 3. Disaggregate Document Score into Security Checksums vs Formatting Standards
     # If checksum checks exist in validation, calculate specific security subscore
-    security_checks = [c for c in checks if any(k in c.get("field", "").lower() for k in ["mrz", "checksum", "verhoeff", "cross_check"])]
+    security_checks = [c for c in checks if any(k in c.get("field", "").lower() for k in ["mrz", "checksum", "verhoeff", "cross_check", "qr", "signature"])]
     if security_checks:
         sec_passed = sum(1 for c in security_checks if c.get("status") == "CORRECT")
         sec_score = (sec_passed / len(security_checks)) * 100.0
@@ -117,8 +117,8 @@ def consolidate_pipeline_scores(
         if "EXPIRED_DOCUMENT" in a_str and not any("expired" in s.lower() for s in suspicious_points):
             suspicious_points.append("Expired Document: Document is expired and invalid for border crossing")
             has_critical_failure = True
-        elif ("CHECKSUM" in a_str or "TAMPERING" in a_str) and not any("checksum" in s.lower() for s in suspicious_points):
-            suspicious_points.append("Security Integrity Flag: Checksum or visual/MRZ mismatch detected")
+        elif ("CHECKSUM" in a_str or "TAMPERING" in a_str or "QR_MISMATCH" in a_str) and not any("checksum" in s.lower() or "qr" in s.lower() for s in suspicious_points):
+            suspicious_points.append("Security Integrity Flag: Checksum, digital signature, or VIZ/QR mismatch detected")
             has_critical_failure = True
         elif not any(a_str.lower() in s.lower() for s in suspicious_points):
             suspicious_points.append(a_str)

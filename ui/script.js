@@ -224,6 +224,138 @@
             `;
         }
 
+        // Helper: Render dedicated Aadhaar QR Code Decoded Data card
+        function renderAadhaarQrHtml(qrData, crossChecks = []) {
+            if (!qrData || qrData.status !== 'success') {
+                return `
+                    <div style="background: rgba(11, 15, 25, 0.5); border: 1px dashed var(--border-color); border-radius: 10px; padding: 0.9rem 1.1rem; margin-top: 1rem;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted); font-size: 0.84rem;">
+                            <span>ℹ️</span>
+                            <span><strong>No Aadhaar QR Code Decoded:</strong> Upload the QR code image from the back of the physical card, PVC card, or e-Aadhaar to enable cryptographic digital signature verification and demographic cross-checking.</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            const isSigned = !!qrData.is_signed;
+            const badgeColor = isSigned ? 'var(--success)' : '#38bdf8';
+            const badgeBg = isSigned ? 'rgba(16, 185, 129, 0.15)' : 'rgba(56, 189, 248, 0.15)';
+            const qrType = qrData.qr_type || 'Secure QR Code';
+
+            let photoHtml = '';
+            if (qrData.photo_base64) {
+                photoHtml = `
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 0.75rem;">
+                        <img src="data:image/jpeg;base64,${qrData.photo_base64}" style="max-height: 130px; border-radius: 8px; border: 2px solid #10b981; box-shadow: 0 4px 14px rgba(16,185,129,0.25);" alt="Aadhaar QR Photo">
+                        <span style="font-size: 0.7rem; color: #34d399; font-weight: 700; margin-top: 0.45rem;">📷 UIDAI Embedded Photo</span>
+                        <span style="font-size: 0.65rem; color: var(--text-muted);">JPEG2000 Decompressed</span>
+                    </div>
+                `;
+            }
+
+            let addressParts = [];
+            if (qrData.careof) addressParts.push(`C/O: ${escapeHtml(qrData.careof)}`);
+            if (qrData.house) addressParts.push(escapeHtml(qrData.house));
+            if (qrData.street) addressParts.push(escapeHtml(qrData.street));
+            if (qrData.landmark) addressParts.push(escapeHtml(qrData.landmark));
+            if (qrData.locality) addressParts.push(escapeHtml(qrData.locality));
+            if (qrData.vtc) addressParts.push(escapeHtml(qrData.vtc));
+            if (qrData.post_office) addressParts.push(`PO: ${escapeHtml(qrData.post_office)}`);
+            if (qrData.district) addressParts.push(escapeHtml(qrData.district));
+            if (qrData.state) addressParts.push(escapeHtml(qrData.state));
+            if (qrData.pincode) addressParts.push(`PIN: ${escapeHtml(qrData.pincode)}`);
+            const formattedAddress = addressParts.length > 0 ? addressParts.join(', ') : (qrData.address || '—');
+
+            let crossCheckHtml = '';
+            if (crossChecks && crossChecks.length > 0) {
+                const aadhaarCross = crossChecks.filter(cc => /Aadhaar|Holder|Name|DOB|Gender|UID/i.test(cc.check || ''));
+                if (aadhaarCross.length > 0) {
+                    crossCheckHtml = `
+                        <div style="margin-top: 1rem; padding: 0.85rem 1rem; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px;">
+                            <div style="font-size: 0.84rem; font-weight: 800; color: #38bdf8; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem;">
+                                <span>🔍</span>
+                                <span>Cryptographic Cross-Check: Visual Card OCR (VIZ) vs Secure QR Data</span>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                                ${aadhaarCross.map(cc => {
+                                    const match = !!cc.match;
+                                    const mColor = match ? 'var(--success)' : 'var(--danger)';
+                                    return `
+                                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; border-bottom: 1px dashed rgba(255,255,255,0.06); padding-bottom: 0.25rem;">
+                                            <span><strong>${escapeHtml(cc.check)}:</strong> Card: <em>'${escapeHtml(cc.visual_value)}'</em> vs QR: <em>'${escapeHtml(cc.qr_value)}'</em></span>
+                                            <span style="font-weight: 800; color: ${mColor}; font-size: 0.74rem; background: ${match ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'}; border: 1px solid ${mColor}; padding: 2px 7px; border-radius: 4px;">${match ? '✅ MATCH' : '❌ MISMATCH'}</span>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            return `
+                <div style="background: rgba(11, 15, 25, 0.8); border: 1px solid ${isSigned ? 'rgba(16, 185, 129, 0.4)' : 'rgba(56, 189, 248, 0.4)'}; border-radius: 12px; padding: 1.25rem; margin-top: 1rem; box-shadow: 0 8px 24px rgba(0,0,0,0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.9rem; flex-wrap: wrap; gap: 0.5rem;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="font-size: 1.25rem;">🪪</span>
+                            <div>
+                                <h4 style="font-size: 1rem; font-weight: 800; color: #34d399; margin: 0;">UIDAI Aadhaar QR Code Decoded Data</h4>
+                                <span style="font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(qrType)} • RSA 2048-bit Digital Envelope</span>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span style="background: ${badgeBg}; color: ${badgeColor}; border: 1px solid ${badgeColor}; padding: 0.25rem 0.65rem; border-radius: 6px; font-weight: 800; font-size: 0.8rem; letter-spacing: 0.04em;">
+                                ${isSigned ? '✅ UIDAI 2048-BIT SIGNED' : 'ℹ️ QR DECODED'}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start;">
+                        ${photoHtml}
+                        
+                        <div style="flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.6rem;">
+                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.6rem 0.75rem;">
+                                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Full Name (QR)</div>
+                                <div style="font-size: 0.95rem; font-weight: 800; color: #f8fafc; margin-top: 0.2rem;">
+                                    ${escapeHtml(qrData.name || '—')}
+                                </div>
+                            </div>
+
+                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.6rem 0.75rem;">
+                                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Aadhaar UID</div>
+                                <div style="font-size: 0.95rem; font-weight: 800; color: #38bdf8; font-family: 'JetBrains Mono', monospace; margin-top: 0.2rem;">
+                                    ${qrData.last_4_digits ? `XXXX XXXX ${escapeHtml(qrData.last_4_digits)}` : (qrData.uid ? escapeHtml(qrData.uid) : '—')}
+                                </div>
+                            </div>
+
+                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.6rem 0.75rem;">
+                                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Date of Birth</div>
+                                <div style="font-size: 0.92rem; font-weight: 700; color: #cbd5e1; font-family: 'JetBrains Mono', monospace; margin-top: 0.2rem;">
+                                    ${escapeHtml(qrData.dob || '—')}
+                                </div>
+                            </div>
+
+                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.6rem 0.75rem;">
+                                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Gender</div>
+                                <div style="font-size: 0.92rem; font-weight: 700; color: #cbd5e1; margin-top: 0.2rem;">
+                                    ${escapeHtml(qrData.gender || '—')}
+                                </div>
+                            </div>
+
+                            <div style="grid-column: 1 / -1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 0.6rem 0.75rem;">
+                                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Full Registered Address</div>
+                                <div style="font-size: 0.86rem; color: #e2e8f0; margin-top: 0.2rem; line-height: 1.45;">
+                                    ${formattedAddress}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    ${crossCheckHtml}
+                </div>
+            `;
+        }
+
         // Camera Initialization with Safe Fallback for Mobile HTTP
         const activeStreams = {};
         const cameraFacingModes = {
@@ -832,8 +964,18 @@
 
         // Dynamic Document Guide Updates based on document selection
         function updateDocGuides(docType) {
-            const isCard = (docType === 'id_card' || docType === 'driving_license');
-            
+            const isAadhaar = (docType === 'aadhaar');
+            const isCard = (docType === 'id_card' || docType === 'aadhaar' || docType === 'driving_license');
+
+            const pipeAadhaarCard = document.getElementById('pipe-aadhaar-qr-card');
+            if (pipeAadhaarCard) {
+                pipeAadhaarCard.style.display = isAadhaar ? 'block' : 'none';
+            }
+            const adminAadhaarCard = document.getElementById('admin-aadhaar-qr-card');
+            if (adminAadhaarCard) {
+                adminAadhaarCard.style.display = isAadhaar ? 'block' : 'none';
+            }
+
             const cutouts = ['pipe-doc-cutout', 'admin-ocr-cutout', 'admin-face2-cutout'];
             const boxes = ['pipe-doc-box', 'admin-ocr-box', 'admin-face2-box'];
             const brackets = ['pipe-doc-brackets', 'admin-ocr-brackets', 'admin-face2-brackets'];
@@ -871,7 +1013,13 @@
             captions.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
-                    el.textContent = isCard ? 'Align ID Card Inside Frame' : 'Align Passport Inside Frame';
+                    if (isAadhaar) {
+                        el.textContent = 'Align Aadhaar Card Inside Frame';
+                    } else if (isCard) {
+                        el.textContent = 'Align ID Card Inside Frame';
+                    } else {
+                        el.textContent = 'Align Passport Inside Frame';
+                    }
                 }
             });
         }
@@ -911,6 +1059,134 @@
         bindCameraFlip('pipe-person-switch-float', 'pipe-person-video', 'pipe-person-fallback');
         bindCameraFlip('admin-face1-flip', 'admin-face1-video', 'admin-face1-fallback');
         bindCameraFlip('admin-face1-switch-float', 'admin-face1-video', 'admin-face1-fallback');
+
+        // Aadhaar QR Handlers (Pipeline and Admin)
+        let pipeAadhaarQrBlob = null;
+        let adminAadhaarQrBlob = null;
+
+        function setupAadhaarQrHandlers(prefix) {
+            const fileInput = document.getElementById(`${prefix}-aadhaar-qr-file`);
+            const filenameEl = document.getElementById(`${prefix}-aadhaar-qr-filename`);
+            const previewBox = document.getElementById(`${prefix}-aadhaar-qr-preview-box`);
+            const previewImg = document.getElementById(`${prefix}-aadhaar-qr-preview`);
+            const decodeBtn = document.getElementById(`${prefix}-aadhaar-qr-decode-btn`);
+            const statusEl = document.getElementById(`${prefix}-aadhaar-qr-instant-status`);
+
+            if (!fileInput) return;
+
+            fileInput.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                if (filenameEl) filenameEl.textContent = file.name;
+                const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+                if (isPdf) {
+                    try {
+                        const formData = new FormData();
+                        formData.append('aadhaar_qr', file, file.name);
+                        if (statusEl) {
+                            statusEl.textContent = 'Rendering PDF QR page...';
+                            statusEl.style.color = '#38bdf8';
+                        }
+                        const res = await fetch('/upload', { method: 'POST', body: formData });
+                        const data = await res.json();
+                        if (data.status === 'success' && data.uploads && data.uploads.aadhaar_qr) {
+                            const imgUrl = data.uploads.aadhaar_qr.url;
+                            const imgRes = await fetch(imgUrl);
+                            const blob = await imgRes.blob();
+                            if (prefix === 'pipe') pipeAadhaarQrBlob = blob;
+                            else adminAadhaarQrBlob = blob;
+                            if (previewImg) previewImg.src = imgUrl;
+                            if (previewBox) previewBox.style.display = 'flex';
+                            if (decodeBtn) decodeBtn.style.display = 'inline-block';
+                            if (statusEl) {
+                                statusEl.textContent = 'PDF converted. Ready to decode.';
+                                statusEl.style.color = 'var(--text-muted)';
+                            }
+                        } else {
+                            if (statusEl) {
+                                statusEl.textContent = `PDF Error: ${data.error || 'Failed'}`;
+                                statusEl.style.color = 'var(--danger)';
+                            }
+                        }
+                    } catch (err) {
+                        if (statusEl) {
+                            statusEl.textContent = `Error: ${err.message}`;
+                            statusEl.style.color = 'var(--danger)';
+                        }
+                    }
+                } else {
+                    if (prefix === 'pipe') pipeAadhaarQrBlob = file;
+                    else adminAadhaarQrBlob = file;
+                    if (previewImg) previewImg.src = URL.createObjectURL(file);
+                    if (previewBox) previewBox.style.display = 'flex';
+                    if (decodeBtn) decodeBtn.style.display = 'inline-block';
+                    if (statusEl) {
+                        statusEl.textContent = 'QR loaded. Tap Decode to view payload.';
+                        statusEl.style.color = 'var(--text-muted)';
+                    }
+                }
+            });
+
+            if (decodeBtn) {
+                decodeBtn.addEventListener('click', async () => {
+                    const blob = prefix === 'pipe' ? pipeAadhaarQrBlob : adminAadhaarQrBlob;
+                    if (!blob) {
+                        alert('Please select an Aadhaar QR code image first.');
+                        return;
+                    }
+
+                    decodeBtn.disabled = true;
+                    decodeBtn.textContent = '⏳ Decoding...';
+                    if (statusEl) {
+                        statusEl.textContent = 'Scanning 2048-bit RSA QR envelope...';
+                        statusEl.style.color = '#38bdf8';
+                    }
+
+                    try {
+                        const formData = new FormData();
+                        formData.append('aadhaar_qr', blob, 'aadhaar_qr.jpg');
+                        const res = await fetch('/decode_aadhaar_qr', { method: 'POST', body: formData });
+                        const data = await res.json();
+
+                        if (data.status === 'success' && data.aadhaar_qr) {
+                            const qr = data.aadhaar_qr;
+                            if (qr.status === 'success') {
+                                if (statusEl) {
+                                    statusEl.innerHTML = `<span style="color:var(--success); font-weight:700;">✅ Decoded: ${escapeHtml(qr.name || 'Cardholder')} (UID: ...${qr.last_4_digits || ''})</span>`;
+                                }
+                                const targetContainer = prefix === 'pipe' 
+                                    ? document.getElementById('pipe-aadhaar-qr-container')
+                                    : document.getElementById('admin-ocr-aadhaar-qr-container');
+                                if (targetContainer) {
+                                    targetContainer.innerHTML = renderAadhaarQrHtml(qr);
+                                    targetContainer.style.display = 'block';
+                                    targetContainer.scrollIntoView({ behavior: 'smooth' });
+                                }
+                            } else {
+                                if (statusEl) {
+                                    statusEl.innerHTML = `<span style="color:var(--danger); font-weight:700;">⚠️ ${escapeHtml(qr.error || 'Could not parse QR code')}</span>`;
+                                }
+                            }
+                        } else {
+                            if (statusEl) {
+                                statusEl.innerHTML = `<span style="color:var(--danger); font-weight:700;">❌ ${escapeHtml(data.error || 'Failed to decode')}</span>`;
+                            }
+                        }
+                    } catch (err) {
+                        if (statusEl) {
+                            statusEl.innerHTML = `<span style="color:var(--danger); font-weight:700;">❌ Network Error: ${escapeHtml(err.message)}</span>`;
+                        }
+                    } finally {
+                        decodeBtn.disabled = false;
+                        decodeBtn.textContent = '⚡ Decode QR Instantly';
+                    }
+                });
+            }
+        }
+        setupAadhaarQrHandlers('pipe');
+        setupAadhaarQrHandlers('admin');
 
         // Bind Slider Label updates
         function bindSlider(id, valId) {
@@ -994,6 +1270,10 @@
                 const formData = new FormData();
                 formData.append('person', personBlob, 'person.jpg');
                 formData.append('document', docBlob, 'document.jpg');
+                if (pipeAadhaarQrBlob) {
+                    formData.append('aadhaar_qr', pipeAadhaarQrBlob, 'aadhaar_qr.jpg');
+                    console.log('[PIPELINE] Appended Aadhaar QR image to upload payload');
+                }
 
                 const uploadRes = await fetch('/upload', { method: 'POST', body: formData });
                 if (!uploadRes.ok) throw new Error('Failed to upload image files to server');
@@ -1456,6 +1736,24 @@
                     </details>
                     ` : ''}
                 `;
+
+                // Render dedicated Aadhaar QR card in Pipeline tab if data available
+                const pipeAadhaarContainer = document.getElementById('pipe-aadhaar-qr-container');
+                const pipeDocType = document.getElementById('pipe-doc-type') ? document.getElementById('pipe-doc-type').value : '';
+                const aadhaarQr = ocrData.aadhaar_qr_parsed || (ocrData.validation && ocrData.validation.aadhaar_qr);
+                const crossChecks = (ocrData.validation && ocrData.validation.cross_checks) || [];
+                if (pipeAadhaarContainer) {
+                    if (aadhaarQr) {
+                        pipeAadhaarContainer.innerHTML = renderAadhaarQrHtml(aadhaarQr, crossChecks);
+                        pipeAadhaarContainer.style.display = 'block';
+                    } else if (pipeDocType === 'aadhaar') {
+                        pipeAadhaarContainer.innerHTML = renderAadhaarQrHtml(null);
+                        pipeAadhaarContainer.style.display = 'block';
+                    } else {
+                        pipeAadhaarContainer.innerHTML = '';
+                        pipeAadhaarContainer.style.display = 'none';
+                    }
+                }
             } else {
                 ocrContainer.innerHTML = `<p style="color:var(--danger)">Error: ${ocrData.error || 'OCR failed'}</p>`;
             }
@@ -1613,6 +1911,21 @@
             const mrzContainer = document.getElementById('admin-ocr-mrz-container');
             if (mrzContainer) {
                 mrzContainer.innerHTML = renderMrzHtml(data.mrz_parsed);
+            }
+
+            // 2.3 Dedicated Aadhaar QR Section
+            const aadhaarContainer = document.getElementById('admin-ocr-aadhaar-qr-container');
+            const adminDocType = document.getElementById('admin-ocr-type') ? document.getElementById('admin-ocr-type').value : '';
+            const adminAadhaarQr = data.aadhaar_qr_parsed || (data.validation && data.validation.aadhaar_qr);
+            const adminCrossChecks = (data.validation && data.validation.cross_checks) || [];
+            if (aadhaarContainer) {
+                if (adminAadhaarQr) {
+                    aadhaarContainer.innerHTML = renderAadhaarQrHtml(adminAadhaarQr, adminCrossChecks);
+                } else if (adminDocType === 'aadhaar' || data.document_type === 'aadhaar') {
+                    aadhaarContainer.innerHTML = renderAadhaarQrHtml(null);
+                } else {
+                    aadhaarContainer.innerHTML = '';
+                }
             }
 
             // 2.5 Module 2 Document Validation Card

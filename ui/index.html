@@ -137,6 +137,31 @@
                 </div>
             </div>
 
+            <!-- Aadhaar QR Code Section (Visible when Aadhaar Card is selected or for standalone QR verification) -->
+            <div class="card" id="pipe-aadhaar-qr-card" style="margin-bottom: 1.5rem; display: none;">
+                <div class="card-header">
+                    <div class="card-title">🪪 Aadhaar QR Code Verification (UIDAI Secure QR / e-Aadhaar)</div>
+                    <span class="tag-pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.3);">Cryptographic Audit</span>
+                </div>
+                <p style="font-size: 0.84rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+                    Upload or snap the QR code from the back of your physical Aadhaar card, PVC card, or e-Aadhaar to cryptographically cross-verify visual card data against UIDAI's 2048-bit digitally signed record.
+                </p>
+                <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+                    <label class="btn btn-outline" style="margin-bottom:0; cursor:pointer;">
+                        📷 Upload QR Code (Image or PDF)
+                        <input type="file" id="pipe-aadhaar-qr-file" accept="image/*,.pdf,application/pdf" capture="environment" style="display:none;">
+                    </label>
+                    <button type="button" class="btn btn-primary" id="pipe-aadhaar-qr-decode-btn" style="display:none;">
+                        ⚡ Decode QR Instantly
+                    </button>
+                    <span id="pipe-aadhaar-qr-filename" style="font-size: 0.82rem; color: var(--text-muted);">No QR image selected (optional for Aadhaar)</span>
+                </div>
+                <div id="pipe-aadhaar-qr-preview-box" style="display:none; margin-top: 0.75rem; align-items: center; gap: 0.75rem;">
+                    <img id="pipe-aadhaar-qr-preview" style="max-height: 120px; max-width: 120px; border-radius: 8px; border: 1px solid var(--border-color);" alt="QR Preview">
+                    <div id="pipe-aadhaar-qr-instant-status" style="font-size: 0.84rem; color: var(--text-muted);"></div>
+                </div>
+            </div>
+
             <!-- Pipeline Sliders -->
             <div class="settings-card">
                 <div class="slider-group">
@@ -167,7 +192,8 @@
                     </div>
                     <select id="pipe-doc-type">
                         <option value="passport">Passport (ICAO Doc 9303)</option>
-                        <option value="id_card">National ID / State ID (e.g. Aadhaar)</option>
+                        <option value="aadhaar">Aadhaar Card (UIDAI PVC / Paper / e-Aadhaar)</option>
+                        <option value="id_card">National ID / State ID Card</option>
                         <option value="driving_license">Driver's License (DL)</option>
                     </select>
                 </div>
@@ -208,6 +234,9 @@
                         <div id="pipe-ocr-res"></div>
                     </div>
                 </div>
+
+                <!-- Dedicated Aadhaar QR Result Card -->
+                <div id="pipe-aadhaar-qr-container" style="margin-bottom: 1.5rem;"></div>
             </div>
         </section>
 
@@ -259,6 +288,31 @@
                 </div>
             </div>
 
+            <!-- Aadhaar QR Admin Card -->
+            <div class="card" id="admin-aadhaar-qr-card" style="width: 100%; max-width: 600px; margin-bottom: 1.5rem; display: none;">
+                <div class="card-header">
+                    <div class="card-title">🪪 Aadhaar QR Code Scanner & Decoder</div>
+                    <span class="tag-pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.3);">UIDAI 2048-bit RSA</span>
+                </div>
+                <p style="font-size: 0.84rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+                    Test standalone Aadhaar QR decoding: extracts demographic data, full address, UIDAI RSA digital signature, and embedded JPEG2000 photograph.
+                </p>
+                <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+                    <label class="btn btn-outline" style="margin-bottom:0; cursor:pointer;">
+                        📁 Upload QR Code Image
+                        <input type="file" id="admin-aadhaar-qr-file" accept="image/*,.pdf,application/pdf" capture="environment" style="display:none;">
+                    </label>
+                    <button type="button" class="btn btn-primary" id="admin-aadhaar-qr-decode-btn" style="display:none;">
+                        ⚡ Decode QR Code
+                    </button>
+                    <span id="admin-aadhaar-qr-filename" style="font-size: 0.82rem; color: var(--text-muted);">No QR image selected</span>
+                </div>
+                <div id="admin-aadhaar-qr-preview-box" style="display:none; margin-top: 0.75rem; align-items: center; gap: 0.75rem;">
+                    <img id="admin-aadhaar-qr-preview" style="max-height: 120px; max-width: 120px; border-radius: 8px; border: 1px solid var(--border-color);" alt="QR Preview">
+                    <div id="admin-aadhaar-qr-instant-status" style="font-size: 0.84rem; color: var(--text-muted);"></div>
+                </div>
+            </div>
+
             <!-- OCR Module Controls -->
             <div class="settings-card">
                 <div class="slider-group">
@@ -279,7 +333,8 @@
                     </div>
                     <select id="admin-ocr-type">
                         <option value="passport">Passport (ICAO Doc 9303)</option>
-                        <option value="id_card">National ID / State ID (e.g. Aadhaar)</option>
+                        <option value="aadhaar">Aadhaar Card (UIDAI PVC / Paper / e-Aadhaar)</option>
+                        <option value="id_card">National ID / State ID Card</option>
                         <option value="driving_license">Driver's License (DL)</option>
                     </select>
                 </div>
@@ -312,6 +367,9 @@
 
                 <!-- Dedicated MRZ Section -->
                 <div id="admin-ocr-mrz-container"></div>
+
+                <!-- Dedicated Aadhaar QR Section -->
+                <div id="admin-ocr-aadhaar-qr-container"></div>
 
                 <!-- Document Validation & Security Compliance (Module 2) -->
                 <div id="admin-ocr-validation-container" style="margin-top: 1rem;"></div>

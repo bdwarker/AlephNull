@@ -56,6 +56,15 @@ except ImportError as e:
     consolidate_pipeline_scores = None
     _log(f"Warning: Could not import consolidate_pipeline_scores: {e}")
 
+# Import Aadhaar QR Decoder
+try:
+    from modules.doc_validation.src.aadhaar_qr import decode_aadhaar_qr_from_file, parse_aadhaar_qr_payload
+    _log("Aadhaar QR decoder imported successfully.")
+except ImportError as e:
+    decode_aadhaar_qr_from_file = None
+    parse_aadhaar_qr_payload = None
+    _log(f"Warning: Could not import Aadhaar QR decoder: {e}")
+
 app = Flask(__name__, static_folder=str(PROJECT_ROOT / "ui"), static_url_path="")
 CORS(app)
 
@@ -64,6 +73,7 @@ UPLOAD_BASE_DIR = PROJECT_ROOT / "data" / "uploads"
 UPLOAD_DIRS = {
     "person": UPLOAD_BASE_DIR / "person",
     "document": UPLOAD_BASE_DIR / "document",
+    "aadhaar_qr": UPLOAD_BASE_DIR / "aadhaar_qr",
 }
 
 for d in UPLOAD_DIRS.values():
@@ -74,7 +84,8 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "pdf"}
 # Cache most recent uploads in memory
 latest_uploads = {
     "person": None,
-    "document": None
+    "document": None,
+    "aadhaar_qr": None
 }
 
 # Cache most recent module results
@@ -176,6 +187,7 @@ def api_root():
             "POST /upload",
             "POST /verify_photo",
             "POST /extract_text",
+            "POST /decode_aadhaar_qr",
             "POST /validate_document",
             "POST /consolidate_score"
         ]
@@ -187,7 +199,7 @@ def upload_file():
     _log("Processing /upload request...")
     handled_files = {}
 
-    for quantifier in ["person", "document"]:
+    for quantifier in ["person", "document", "aadhaar_qr"]:
         if quantifier in request.files:
             file_item = request.files[quantifier]
             if file_item and file_item.filename != "":
@@ -221,13 +233,13 @@ def upload_file():
 
     if not quantifier:
         return jsonify({
-            "error": "Missing quantifier. Specify 'type' or 'quantifier' as 'document' or 'person'."
+            "error": "Missing quantifier. Specify 'type' or 'quantifier' as 'document', 'person', or 'aadhaar_qr'."
         }), 400
 
     quantifier = quantifier.strip().lower()
-    if quantifier not in ["document", "person"]:
+    if quantifier not in ["document", "person", "aadhaar_qr"]:
         return jsonify({
-            "error": f"Invalid quantifier '{quantifier}'. Allowed values are 'document' and 'person'."
+            "error": f"Invalid quantifier '{quantifier}'. Allowed values are 'document', 'person', and 'aadhaar_qr'."
         }), 400
 
     file_item = request.files.get("file") or request.files.get("image")
@@ -416,6 +428,31 @@ def extract_text():
             _log(f"DocumentOCR returned error: {result.get('error')}")
             return jsonify(result), 500
 
+        # Check for Aadhaar QR image upload or cached QR
+        aadhaar_qr_path = None
+        if "aadhaar_qr" in request.files:
+            aq_file = request.files["aadhaar_qr"]
+            if aq_file and aq_file.filename:
+                _, aadhaar_qr_path = save_image_file(aq_file, "aadhaar_qr")
+        if not aadhaar_qr_path:
+            aadhaar_qr_path = (
+                (request.json.get("aadhaar_qr_path") if request.is_json else None)
+                or request.form.get("aadhaar_qr_path")
+                or request.args.get("aadhaar_qr_path")
+                or latest_uploads.get("aadhaar_qr")
+            )
+
+        if aadhaar_qr_path and os.path.exists(aadhaar_qr_path):
+            result["aadhaar_qr_path"] = aadhaar_qr_path
+            if not result.get("aadhaar_qr_parsed") and decode_aadhaar_qr_from_file:
+                try:
+                    qr_res = decode_aadhaar_qr_from_file(aadhaar_qr_path)
+                    if qr_res.get("status") == "success":
+                        result["aadhaar_qr_parsed"] = qr_res
+                        _log(f"Decoded separate Aadhaar QR file: {qr_res.get('qr_type')}")
+                except Exception as qr_err:
+                    _log(f"Warning decoding separate Aadhaar QR: {qr_err}")
+
         # Auto-validate with Module 2 if available
         if DocumentValidator is not None:
             try:
@@ -434,6 +471,72 @@ def extract_text():
 
     except Exception as e:
         _log(f"ERROR in /extract_text: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+
+@app.route("/decode_aadhaar_qr", methods=["POST", "GET"])
+def decode_aadhaar_qr_endpoint():
+    _log("Processing /decode_aadhaar_qr request...")
+    if decode_aadhaar_qr_from_file is None:
+        _log("ERROR: Aadhaar QR decoder not loaded.")
+        return jsonify({
+            "status": "error",
+            "error": "Aadhaar QR decoder module is not available."
+        }), 500
+
+    qr_path = None
+    payload_str = None
+
+    if "aadhaar_qr" in request.files:
+        qr_file = request.files["aadhaar_qr"]
+        if qr_file and qr_file.filename:
+            _, qr_path = save_image_file(qr_file, "aadhaar_qr")
+    elif "file" in request.files or "image" in request.files:
+        qr_file = request.files.get("file") or request.files.get("image")
+        if qr_file and qr_file.filename:
+            _, qr_path = save_image_file(qr_file, "aadhaar_qr")
+
+    if not qr_path:
+        req_json = request.get_json(silent=True) or {}
+        qr_path = req_json.get("qr_path") or req_json.get("image_path") or req_json.get("aadhaar_qr_path")
+        payload_str = req_json.get("payload") or req_json.get("qr_data")
+
+    if not qr_path and not payload_str:
+        qr_path = request.form.get("qr_path") or request.form.get("aadhaar_qr_path") or request.args.get("qr_path")
+        payload_str = request.form.get("payload") or request.args.get("payload")
+
+    if not qr_path and not payload_str:
+        qr_path = latest_uploads.get("aadhaar_qr") or latest_uploads.get("document")
+
+    if not qr_path and not payload_str:
+        return jsonify({
+            "status": "error",
+            "error": "No Aadhaar QR code image or payload provided.",
+            "hint": "Upload a QR code image using form-data field 'aadhaar_qr' or pass 'qr_path'/'payload'."
+        }), 400
+
+    try:
+        if payload_str:
+            _log("Parsing Aadhaar QR payload string directly...")
+            res = parse_aadhaar_qr_payload(payload_str)
+        else:
+            if not os.path.exists(qr_path):
+                return jsonify({"status": "error", "error": f"QR image not found: {qr_path}"}), 404
+            _log(f"Scanning & decoding Aadhaar QR code from: {qr_path}")
+            res = decode_aadhaar_qr_from_file(qr_path)
+
+        _log(f"Aadhaar QR decode result: status={res.get('status')}, type={res.get('qr_type')}, name={res.get('name')}")
+        return jsonify({
+            "status": "success",
+            "aadhaar_qr": res,
+            "inputs": {"qr_path": qr_path}
+        }), 200
+
+    except Exception as e:
+        _log(f"ERROR decoding Aadhaar QR: {e}")
         return jsonify({
             "status": "error",
             "error": str(e)

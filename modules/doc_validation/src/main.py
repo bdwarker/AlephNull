@@ -57,6 +57,24 @@ from rules.visa_rules import validate_visa
 # pyrefly: ignore [missing-import]
 from rules.permit_rules import validate_permit
 
+try:
+    # pyrefly: ignore [missing-import]
+    from rules.aadhaar_rules import validate_aadhaar
+except ImportError:
+    try:
+        from ..rules.aadhaar_rules import validate_aadhaar
+    except Exception:
+        from modules.doc_validation.rules.aadhaar_rules import validate_aadhaar
+
+try:
+    from .aadhaar_qr import decode_aadhaar_qr_from_file
+except (ImportError, ValueError):
+    try:
+        # pyrefly: ignore [missing-import]
+        from aadhaar_qr import decode_aadhaar_qr_from_file
+    except ImportError:
+        from modules.doc_validation.src.aadhaar_qr import decode_aadhaar_qr_from_file
+
 
 def _log(msg: str):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -92,9 +110,11 @@ class DocumentValidator:
         dt = str(doc_type).strip().lower().replace("-", "_").replace(" ", "_")
         if "passport" in dt or dt == "p":
             return "passport"
+        if "aadhaar" in dt or "aadhar" in dt or "uidai" in dt:
+            return "aadhaar"
         if any(x in dt for x in ["dl", "driver", "driving", "license"]):
             return "driving_license"
-        if any(x in dt for x in ["aadhaar", "national_id", "id_card", "state_id", "card", "national"]):
+        if any(x in dt for x in ["national_id", "id_card", "state_id", "card", "national"]):
             return "national_id"
         if "visa" in dt:
             return "visa"
@@ -199,7 +219,17 @@ class DocumentValidator:
         _log(f"Dispatching to validation rule engine for: {norm_type}")
         if norm_type == "passport":
             validation = validate_passport(fields, mrz_data=mrz_data)
-        elif norm_type in ["national_id", "id_card", "aadhaar"]:
+        elif norm_type == "aadhaar":
+            qr_data = raw_data.get("aadhaar_qr_parsed") or raw_data.get("qr_parsed") or raw_data.get("qr_data")
+            if not qr_data and (raw_data.get("aadhaar_qr_path") or raw_data.get("qr_path")):
+                qr_file = raw_data.get("aadhaar_qr_path") or raw_data.get("qr_path")
+                try:
+                    qr_data = decode_aadhaar_qr_from_file(qr_file)
+                    _log(f"Decoded Aadhaar QR from {qr_file}: status={qr_data.get('status')}")
+                except Exception as qr_err:
+                    _log(f"Warning decoding Aadhaar QR: {qr_err}")
+            validation = validate_aadhaar(fields, qr_data=qr_data)
+        elif norm_type in ["national_id", "id_card"]:
             validation = validate_id_card(fields)
         elif norm_type in ["driving_license", "dl"]:
             validation = validate_driving_license(fields)
@@ -249,7 +279,9 @@ class DocumentValidator:
 
         for cc in cross_checks:
             if not cc.get("match"):
-                suspicious_points.append(f"Visual vs MRZ Mismatch: {cc.get('check', 'Cross-check')} (Visual: '{cc.get('visual_value')}' vs MRZ: '{cc.get('mrz_value')}')")
+                sec_val = cc.get("qr_value") if cc.get("qr_value") is not None else cc.get("mrz_value")
+                sec_type = "QR" if cc.get("qr_value") is not None else "MRZ"
+                suspicious_points.append(f"Visual vs {sec_type} Mismatch: {cc.get('check', 'Cross-check')} (Visual: '{cc.get('visual_value')}' vs {sec_type}: '{sec_val}')")
 
         for anom in anomalies:
             anom_str = str(anom)
@@ -304,6 +336,7 @@ class DocumentValidator:
             "flags": validation["flags"],
             "anomalies": anomalies,
             "cross_checks": cross_checks,
+            "aadhaar_qr": validation.get("qr_data") or raw_data.get("aadhaar_qr_parsed") or raw_data.get("qr_parsed"),
             "input_fields": {k: v for k, v in fields.items() if isinstance(v, (str, int, float, bool)) and len(str(v)) < 100}
         }
 
