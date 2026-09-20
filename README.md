@@ -1,184 +1,223 @@
-# AlephNull — AI-Powered Identity Verification
+# AlephNull
 
-> Offline-first, local identity verification pipeline for **face matching** and **document OCR**, built for the Smart India Hackathon (SIH 2024, PS26188).
+AI-powered, offline-first identity and document screening pipeline for SIH Problem Statement **PS26188** (MHA/SSB).
 
----
-
-## What It Does
-
-AlephNull verifies a person's identity against a government-issued ID in a fully offline, privacy-preserving pipeline:
-
-1. **📄 Document OCR (Module 1)** — Extracts structured fields (Name, Passport Number, Date of Birth, Nationality, Expiry, MRZ) from a photographed passport or national ID using Tesseract + Ollama LLM correction.
-2. **👤 Face Verification (Module 4)** — Compares a live selfie against the photo on the ID document using DeepFace + FaceNet512 with a calibrated Euclidean-L2 threshold.
-3. **🌐 Full Pipeline** — Both modules run in parallel via a Flask REST API and results are rendered in a premium dark-themed single-page web UI.
+AlephNull combines OCR extraction, deterministic document validation, biometric face verification, and consolidated risk scoring into a single local workflow.
 
 ---
 
-## Screenshots
+## 1) What this project does
 
-| Live Biometric Viewfinder | Interactive Crop Tool |
-|---|---|
-| Neon SVG oval + document frame overlaid on live camera stream | Touch & mouse drag, rotation, aspect ratio presets |
+Given a traveler selfie and a document image (passport/ID/visa/etc.), the system:
 
----
-
-## Features
-
-- **In-browser camera viewfinder** with animated biometric SVG overlays (face oval, document corner brackets) on both desktop and mobile.
-- **Interactive image cropper** — drag handles, 90° rotation, Passport/ID Card/1:1 aspect presets, rule-of-thirds grid. Only the cropped sub-image is sent to the backend.
-- **Adjustable strictness sliders** for both face match threshold and OCR bounding box confidence.
-- **Admin diagnostic tabs** — test OCR or Face matching independently without running the full pipeline.
-- **HTTPS / mobile support** — run with `--ssl` to enable in-browser live camera on Android & iOS (self-signed cert auto-generated).
-- **AI-assisted OCR correction** — Ollama (LLaMA3 / Gemma2) intelligently corrects Tesseract raw output field-by-field.
-- **Dominant face extraction** — strips holographic watermarks and micro-prints from passport photos before embedding comparison.
-- **Multi-orientation fallback** — tries 0°, 90°, 180°, 270° if face is not detected at default orientation.
+1. **Extracts document text and structure** from OCR (`modules/ocr_extraction`)
+2. **Validates extracted fields** with deterministic rules and checksums (`modules/doc_validation`)
+3. **Matches face from selfie to document portrait** (`modules/face_verification`)
+4. **Consolidates module outputs into a single risk score** (`risk_engine`)
+5. **Exposes all functions through a local Flask API + web UI** (`api`, `ui`)
 
 ---
 
-## Project Structure
+## 2) Repository architecture
 
-```
+```text
 AlephNull/
 ├── api/
-│   └── src/
-│       └── main.py           # Flask REST API (serves UI + /upload /verify_photo /extract_text)
+│   └── src/main.py                 # Flask app, orchestration endpoints, SSL cert generation
 ├── modules/
-│   ├── face_verification/
-│   │   ├── src/main.py       # FaceVerification class — DeepFace + FaceNet512
-│   │   └── tests/
 │   ├── ocr_extraction/
-│   │   ├── src/main.py       # DocumentOCR class — Tesseract + Ollama correction
-│   │   └── tests/
-│   ├── doc_validation/       # (Planned) Document authenticity validation
-│   └── tampering_detection/  # (Planned) Image tampering detection
+│   │   └── src/main.py             # EasyOCR pipeline, line clustering, MRZ detection, optional LLM fallback
+│   ├── doc_validation/
+│   │   ├── src/main.py             # DocumentValidator orchestrator
+│   │   ├── src/mrz_parser.py       # ICAO 9303 parsing + check-digit verification
+│   │   ├── src/aadhaar_qr.py       # Aadhaar QR decoding/parsing helpers
+│   │   └── rules/*.py              # Passport/Aadhaar/ID/DL/Visa/Permit rule engines
+│   ├── face_verification/
+│   │   └── src/main.py             # InsightFace-based 1:1 biometric verification
+│   └── tampering_detection/
+│       └── .../.gitkeep            # Planned module scaffold
+├── risk_engine/
+│   └── src/scorer.py               # Weighted consolidation + suspicious-point synthesis
 ├── ui/
-│   └── index.html            # Single-page frontend (vanilla JS + CSS, no framework)
+│   ├── index.html
+│   ├── script.js                   # Camera capture, cropper, pipeline/admin flows
+│   └── style.css
 ├── data/
-│   ├── uploads/              # Runtime: captured images saved here by Flask
-│   │   ├── person/
-│   │   └── document/
-│   ├── certs/                # Auto-generated self-signed SSL certs (gitignored)
-│   └── raw/                  # Training/test data (gitignored)
-├── docs/
-│   ├── PS26188_Problem_Analysis.md   # SIH problem statement analysis
-│   └── architecture.md
-├── pyproject.toml
-└── README.md
+│   ├── uploads/                    # Runtime uploads (gitignored contents)
+│   ├── raw/                        # Raw datasets/artifacts (gitignored contents)
+│   └── certs/                      # Auto-generated SSL certs
+└── docs/                           # Architecture notes and roadmap
 ```
 
 ---
 
-## Quick Start
+## 3) Runtime architecture (current implementation)
+
+```text
+User (UI camera/upload)
+    -> /upload
+    -> /verify_photo (Module 4)
+    -> /extract_text  (Module 1)
+         -> auto /validate_document (Module 2)
+    -> /consolidate_score (Risk Engine)
+    -> JSON response + UI rendering
+```
+
+### Key API endpoints implemented
+
+- `GET /api` – module availability + endpoint listing
+- `POST /upload` – image/PDF ingestion and storage under `data/uploads`
+- `POST /verify_photo` – face matching pipeline
+- `POST /extract_text` – OCR extraction pipeline
+- `POST /validate_document` – deterministic rule validation
+- `POST /decode_aadhaar_qr` – Aadhaar QR decode utility
+- `POST /consolidate_score` – final weighted score + suspicious points
+
+---
+
+## 4) Module-by-module deep dive
+
+### Module 1 — OCR extraction (`modules/ocr_extraction`)
+
+Current behavior:
+
+- Uses **EasyOCR** for text box extraction with confidence.
+- Clusters words into lines via vertical overlap (layout-aware grouping).
+- Extracts fields using deterministic heuristics (name, document number, DOB, expiry, nationality, gender).
+- Detects likely MRZ lines and parses them (via Module 2 MRZ parser).
+- Supports optional local `.gguf` model loading from `modules/models` through `llama-cpp-python` for bounded fallback.
+- Returns rich OCR artifacts (`raw_ocr`, `regions_identified`, `ocr_passes`, timing).
+
+### Module 2 — Document validation (`modules/doc_validation`)
+
+Current behavior:
+
+- Normalizes heterogeneous OCR keys into canonical field names.
+- Dispatches by document type (`passport`, `aadhaar`, `national_id`, `driving_license`, `visa`, `permit`).
+- Applies deterministic checks:
+  - ICAO MRZ check digits
+  - Verhoeff checksum for Aadhaar-like IDs
+  - format/date/expiry consistency rules
+  - cross-check logic (including VIZ vs MRZ and QR-derived fields when available)
+- Produces transparent outputs: score, flags, anomalies, suspicious points, checks summary.
+
+### Module 3 — Tampering detection (`modules/tampering_detection`)
+
+Current behavior:
+
+- **Not implemented yet in code** (scaffold folders and model placeholder only).
+
+Planned behavior from `docs/Document-Forensics-and-Tampering-Detection.md`:
+
+- ELA, copy-move detection, text/font inconsistency analysis, stamp authenticity checks, metadata/EXIF forensic checks.
+
+### Module 4 — Face verification (`modules/face_verification`)
+
+Current behavior:
+
+- Uses **InsightFace FaceAnalysis** (ArcFace-style embeddings via model pack, default `buffalo_l`).
+- Performs robust face detection with multi-rotation, multi-scale, and edge-padding fallback.
+- Compares embeddings with cosine similarity.
+- Applies strictness-adjusted thresholding and outputs calibrated trust score + diagnostic metadata.
+
+### Risk Engine (`risk_engine`)
+
+Current behavior:
+
+- Aggregates face and validation signals into weighted consolidated score.
+- Adds guardrails (caps score when critical failures exist).
+- Generates suspicious points and category-wise explanation.
+- Optionally appends audit entries to `data/audit.log`.
+
+---
+
+## 5) What is implemented vs what remains
+
+### Implemented in repository
+
+- End-to-end local API + UI workflow (`upload -> OCR/Face -> validate -> consolidate`).
+- OCR extraction with field heuristics and MRZ parsing integration.
+- Deterministic validation engines for passport, Aadhaar/national ID, driving license, visa, permit.
+- Aadhaar QR decode path (where dependencies and payload conditions are met).
+- InsightFace-based biometric comparison with detailed diagnostics.
+- Consolidated risk scoring and audit-log writing.
+- HTTPS startup mode with auto-generated self-signed certificates.
+
+### Still pending / partially implemented (from docs roadmap)
+
+- Full **Module 3 tampering detection engine** (currently design + scaffold only).
+- Stronger OCR pre-processing pipeline described in docs (deskew/advanced preprocessing stack).
+- Production-grade active-learning feedback cache (`ocr_feedback_cache`) as specified in docs.
+- Offline store-and-forward queue (`pending_sync_queue`) and HQ sync workflow from architecture docs.
+- Blockchain/Merkle audit ledger and decentralized watchlist sync design.
+- Explainable dossier PDF generation and complete incident reporting workflow.
+- Broader evaluation harness, labeled datasets, and module-level benchmark reporting.
+
+---
+
+## 6) Docs map (reference design source)
+
+Use these documents in `docs/` as architecture references:
+
+- `Problem Statement.md` – official PS26188 framing
+- `PS26188_Problem_Analysis.md` – scoped objectives and stage breakdown
+- `Modules_1_and_2_Architecture_Updated.md` – detailed OCR + deterministic validation architecture
+- `Document-Forensics-and-Tampering-Detection.md` – Module 3 forensic design
+- `Offline-First-Store-and-Forward.md` – disconnected edge deployment strategy
+- `Blockchain-Audit-Trail-and-Watchlist-Sync.md` – tamper-proof ledger/watchlist concept
+- `Explainable-AI-and-Incident-Dossier.md` – explainability and reporting UX direction
+
+> Note: Some docs describe target architecture and future phases; current codebase implements only part of that full blueprint.
+
+---
+
+## 7) Local setup
 
 ### Prerequisites
 
-| Requirement | Version |
-|---|---|
-| Python | ≥ 3.11 |
-| [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) | ≥ 5.x, add to PATH |
-| [Ollama](https://ollama.com) + `llama3` or `gemma2` model | Optional — used for OCR correction |
-| pip / venv | Standard |
+- Python 3.11+
+- Tesseract (if you use Tesseract-dependent experiments/tools)
+- Optional but recommended for full flows:
+  - `easyocr`, `insightface`, `onnxruntime`, `pypdfium2`, `Pillow`, `pyzbar`, `pyaadhaar`, `llama-cpp-python`
 
 ### Install
 
 ```bash
-git clone https://github.com/bdwarker/AlephNull.git
-cd AlephNull
-
+cd /home/runner/work/AlephNull/AlephNull
 python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # Linux / macOS
+source .venv/bin/activate  # Linux/macOS
+# .venv\Scripts\activate   # Windows
 
+pip install -r requirements.txt
 pip install -e .
-pip install cryptography deepface tf-keras pillow ollama
 ```
 
-### Run
+### Run API + UI
 
 ```bash
-# Standard (localhost only — camera works in browser on your PC)
-python api/src/main.py
-
-# HTTPS mode (enables live in-browser camera on Android/iOS over LAN)
-python api/src/main.py --ssl
+python /home/runner/work/AlephNull/AlephNull/api/src/main.py
 ```
 
-Then open `http://localhost:5000` (or `https://<your-ip>:5000` for mobile).
+Open: `http://localhost:5000`
 
----
+### Run HTTPS mode (mobile camera support)
 
-## API Endpoints
-
-| Method | Route | Description |
-|---|---|---|
-| `GET` | `/` | Serves the web UI (`ui/index.html`) |
-| `GET` | `/health` | Health check + module status |
-| `POST` | `/upload` | Upload `person` and/or `document` image files |
-| `POST` | `/verify_photo` | Run face match on last uploaded images |
-| `POST` | `/extract_text` | Run OCR on last uploaded document image |
-
-### Query Parameters
-
-**`POST /verify_photo`**
-- `face_strictness` (0–100, default 50) — Maps to DeepFace distance threshold
-- `model_name` — `Facenet512` (default), `VGG-Face`, `ArcFace`, `GhostFaceNet`
-- `detector_backend` — `opencv` (default), `ssd`, `mtcnn`
-
-**`POST /extract_text`**
-- `type` / `doc_type` / `q` — `passport` (default), `id_card` (National ID / Aadhaar), or `driving_license` (Driver's License)
-- `ocr_strictness` (0–100) — Sobel morphological dilation kernel strictness (100 = tight text box, 0 = generous document margins)
-- Returns: `extracted_fields`, `regions_identified` (bounding boxes, master crop, dimensions), `ocr_passes` (PSM 11 sparse, PSM 6 block, specialized), `raw_text`
-
----
-
-## Mobile Camera Setup
-
-Mobile browsers (Android Chrome, iOS Safari) block `getUserMedia()` on plain HTTP origins.
-
-**Option A — `--ssl` flag (recommended):**
 ```bash
-python api/src/main.py --ssl
+python /home/runner/work/AlephNull/AlephNull/api/src/main.py --ssl
 ```
-A self-signed cert is auto-generated at `data/certs/`. Open `https://<your-local-ip>:5000` on your phone and accept the certificate warning once.
 
-**Option B — Chrome flag (Android only):**
-1. Open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
-2. Enter your machine URL, enable, relaunch.
+Open: `https://<your-local-ip>:5000`
 
 ---
 
-## Module Details
+## 8) Data and artifact handling
 
-### Face Verification
-- **Model:** FaceNet512 (512-dimensional embeddings)
-- **Metric:** Euclidean-L2, calibrated threshold `1.0400`
-- **Key feature:** Dominant face extraction isolates the largest face, eliminating passport hologram and watermark false matches
-- **Multi-orientation:** Automatically retries at 90°, 180°, 270° if no face is detected
-
-### Document OCR
-- **Stage 1:** Tesseract with `--psm 6` (uniform block) + bounding box confidence filtering
-- **Stage 2:** Ollama LLM (LLaMA3/Gemma2) corrects raw Tesseract output field-by-field using structured prompts
-- **Extracts:** Name, Passport Number / ID Number, Date of Birth, Date of Expiry, Nationality, MRZ line
+- Runtime uploads are stored under `data/uploads/`.
+- Raw documents and tampering-model artifacts are intentionally ignored in git, with `.gitkeep` placeholders preserved.
+- SSL certs are generated locally in `data/certs/` when `--ssl` is used.
 
 ---
 
-## Tech Stack
+## 9) License
 
-| Layer | Technology |
-|---|---|
-| Frontend | Vanilla HTML + CSS + JS (no framework), Google Fonts Inter |
-| Backend | Flask, Flask-CORS |
-| Face AI | DeepFace, FaceNet512, RetinaFace |
-| OCR | Tesseract OCR, Pillow, OpenCV |
-| OCR Correction | Ollama (LLaMA3 / Gemma2) |
-| SSL | `cryptography` — self-signed cert generation |
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).
-
----
-
-*Built for SIH 2024 — Problem Statement PS26188.*
+MIT License. See `/home/runner/work/AlephNull/AlephNull/LICENSE`.
